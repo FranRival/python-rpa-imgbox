@@ -27,7 +27,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 from openpyxl import load_workbook, Workbook
 
 # ============ CONFIG =============
-ROOT_FOLDER = r"C:\Users\dell\Downloads\enero2\batch1\alisto"
+ROOT_FOLDER = r"C:\Users\dell\Downloads\enero2\batch3\listo"
 EXCEL_PATH = r"C:\Users\dell\Desktop\resultado_embeds.xlsx"   # si no existe, se creará
 SHEET_NAME = "Sheet1"
 OUTPUT_CSV = "results.csv"

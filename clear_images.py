@@ -3,7 +3,7 @@ import shutil
 import re
 
 # ================= CONFIG =================
-ROOT_DIR = r"C:\Users\dell\Downloads\enero2\batch8"
+ROOT_DIR = r"C:\Users\dell\Downloads\enero2\febrero"
 BASURA_DIR = os.path.join(ROOT_DIR, "basura")
 
 DRY_RUN = False   # True = simula | False = ejecuta

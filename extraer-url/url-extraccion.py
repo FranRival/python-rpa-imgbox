@@ -7,7 +7,7 @@ import time
 # CONFIG
 # =========================
 
-START_URL = "https://www.poringa.net/buscar/?q=%40CarlitoxxxEspia"
+START_URL = "https://www.poringa.net/buscar/?q=%40viejopaja45"
 POST_PATTERN = "/posts/imagenes/"
 OUTPUT_FILE = "links.txt"
 MAX_PAGES = 14          # límite de seguridad
