@@ -10,6 +10,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
+from openpyxl import Workbook, load_workbook
+
 
 # =========================
 # CONFIGURACIÓN
@@ -17,6 +19,9 @@ from webdriver_manager.chrome import ChromeDriverManager
 RUTA_BATCH_TXT = r"C:\Users\dell\Desktop\batch-ruta.txt"
 IMGBOX_URL = "https://imgbox.com/upload"
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
+
+EXCEL_PATH = r"C:\Users\dell\Desktop\result.xlsx"
+SHEET_NAME = "Sheet1"
 
 
 # =========================
@@ -39,19 +44,46 @@ def obtener_subcarpetas(root):
     ]
 
 
-def contar_archivos(folder):
-    return sum(
-        1 for f in os.listdir(folder)
-        if Path(f).suffix.lower() in ALLOWED_EXT
-    )
+# =========================
+# EXCEL
+# =========================
+
+def ensure_excel(path, sheet_name):
+    if not os.path.exists(path):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = sheet_name
+        wb.save(path)
+
+    wb = load_workbook(path)
+    if sheet_name not in wb.sheetnames:
+        wb.create_sheet(sheet_name)
+
+    return wb
 
 
-def calcular_timeout_dinamico(num_files):
-    base = 300
-    por_imagen = 2
-    maximo = 2400
-    estimado = base + (num_files * por_imagen)
-    return min(estimado, maximo)
+def find_or_create_column(wb, sheet_name, header):
+    ws = wb[sheet_name]
+    max_col = ws.max_column
+
+    for col in range(1, max_col + 1):
+        if (ws.cell(row=1, column=col).value or "").strip() == header:
+            return col
+
+    new_col = max_col + 1
+    ws.cell(row=1, column=new_col, value=header)
+    return new_col
+
+
+def write_html_to_excel(header, html):
+    wb = ensure_excel(EXCEL_PATH, SHEET_NAME)
+    ws = wb[SHEET_NAME]
+
+    col = find_or_create_column(wb, SHEET_NAME, header)
+    ws.cell(row=2, column=col, value=html)
+
+    wb.save(EXCEL_PATH)
+    print(f"💾 HTML guardado en Excel → columna: {header}")
 
 
 # =========================
@@ -87,32 +119,47 @@ def seleccionar_adult_content(driver):
     """)
 
     time.sleep(1)
-    print("✅ Adult Content forzado")
-
-
-def esperar_html_final(driver, timeout):
-    print(f"⌛ Esperando HTML final ({int(timeout/60)} min máximo)...")
-    end_time = time.time() + timeout
-
-    while time.time() < end_time:
-        try:
-            areas = driver.find_elements(By.TAG_NAME, "textarea")
-            for a in areas:
-                val = (a.get_attribute("value") or "").lower()
-                if "<a " in val and "<img " in val and "imgbox.com" in val:
-                    print("✅ HTML detectado — subida finalizada")
-                    return True
-        except:
-            pass
-
-        time.sleep(2)
-
-    print("⛔ Timeout esperando HTML")
-    return False
+    print("✅ Adult Content configurado")
 
 
 # =========================
-# PROCESO
+# ESPERA REAL SIN TIMEOUT
+# =========================
+
+def extract_fullsize_html(driver):
+    try:
+        areas = driver.find_elements(By.TAG_NAME, "textarea")
+        for a in areas:
+            val = (a.get_attribute("value") or "").strip()
+            lower = val.lower()
+            if (
+                val
+                and "<a " in val
+                and "<img " in val
+                and "imgbox.com" in lower
+                and "thumb" not in lower
+            ):
+                return val
+    except:
+        pass
+
+    return ""
+
+
+def esperar_html_final(driver):
+    print("⌛ Esperando HTML FINAL (sin timeout)...")
+
+    while True:
+        html = extract_fullsize_html(driver)
+        if html:
+            print("✅ HTML detectado — subida confirmada")
+            return html
+
+        time.sleep(3)
+
+
+# =========================
+# PROCESO PRINCIPAL
 # =========================
 
 def subir_carpeta(driver, folder):
@@ -126,11 +173,10 @@ def subir_carpeta(driver, folder):
         print(f"⚠️ Carpeta vacía: {folder}")
         return
 
-    timeout = calcular_timeout_dinamico(len(archivos))
+    nombre_carpeta = os.path.basename(folder)
 
-    print(f"\n📁 Subiendo carpeta: {folder}")
+    print(f"\n📁 Subiendo carpeta: {nombre_carpeta}")
     print(f"📦 Archivos: {len(archivos)}")
-    print(f"⏱️ Timeout asignado: {int(timeout/60)} minutos")
 
     driver.get(IMGBOX_URL)
     time.sleep(3)
@@ -152,7 +198,10 @@ def subir_carpeta(driver, folder):
     )
     driver.execute_script("arguments[0].click();", start_btn)
 
-    esperar_html_final(driver, timeout)
+    # 🔥 Espera real
+    html = esperar_html_final(driver)
+
+    write_html_to_excel(nombre_carpeta, html)
 
 
 def main():
@@ -168,7 +217,7 @@ def main():
 
     try:
         for idx, carpeta in enumerate(carpetas, 1):
-            print(f"\n==============================")
+            print("\n==============================")
             print(f"➡️ Carpeta {idx}/{len(carpetas)}")
             subir_carpeta(driver, carpeta)
 
