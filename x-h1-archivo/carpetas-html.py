@@ -9,6 +9,7 @@ import time
 # =========================
 BASE_DIR = r"C:\Users\dell\Downloads\febrero"
 LINKS_FILE = "links.txt"
+SIN_H1_FILE = "sin_h1_urls.txt"
 TIMEOUT = 30
 DELAY = 1   # segundos entre requests
 
@@ -35,6 +36,9 @@ with open(LINKS_FILE, "r", encoding="utf-8") as f:
 print(f"🔗 URLs detectadas: {len(urls)}")
 print(f"📁 Carpeta destino: {BASE_DIR}")
 
+# Limpiar archivo de URLs sin H1
+open(SIN_H1_FILE, "w", encoding="utf-8").close()
+
 # =========================
 # PROCESAMIENTO
 # =========================
@@ -54,11 +58,17 @@ for i, url in enumerate(urls, 1):
         soup = BeautifulSoup(html, "html.parser")
 
         h1 = soup.find("h1")
-        if h1:
-            nombre_carpeta = limpiar_nombre(h1.get_text())
-        else:
-            print("⚠️ No se encontró H1, usando fallback.")
-            nombre_carpeta = f"sin_h1_{i}"
+
+        # --- NUEVA LOGICA ---
+        if not h1:
+            print("⚠️ No se encontró H1. URL enviada a sin_h1_urls.txt")
+
+            with open(SIN_H1_FILE, "a", encoding="utf-8") as f:
+                f.write(url + "\n")
+
+            continue   # Saltar esta URL completamente
+
+        nombre_carpeta = limpiar_nombre(h1.get_text())
 
         ruta_carpeta = os.path.join(BASE_DIR, nombre_carpeta)
         os.makedirs(ruta_carpeta, exist_ok=True)
