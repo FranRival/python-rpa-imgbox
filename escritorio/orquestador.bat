@@ -35,7 +35,7 @@ echo %CURRENT%
 echo =========================================
 echo.
 
-%PYTHON% %UPLOADER% "%CURRENT%"
+%PYTHON% %UPLOADER% "%CURRENT%" <nul
 
 if errorlevel 1 (
     echo.

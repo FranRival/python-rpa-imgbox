@@ -1,7 +1,11 @@
 import os
+import sys
 import time
 import traceback
 from pathlib import Path
+
+# 🔒 EVITA CONGELAMIENTO DE CMD (stdin fantasma)
+sys.stdin = open(os.devnull)
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -123,7 +127,7 @@ def seleccionar_adult_content(driver):
 
 
 # =========================
-# ESPERA REAL SIN TIMEOUT
+# ESPERA REAL
 # =========================
 
 def extract_fullsize_html(driver):
@@ -147,7 +151,7 @@ def extract_fullsize_html(driver):
 
 
 def esperar_html_final(driver):
-    print("⌛ Esperando HTML FINAL (sin timeout)...")
+    print("⌛ Esperando HTML FINAL...")
 
     while True:
         html = extract_fullsize_html(driver)
@@ -198,9 +202,7 @@ def subir_carpeta(driver, folder):
     )
     driver.execute_script("arguments[0].click();", start_btn)
 
-    # 🔥 Espera real
     html = esperar_html_final(driver)
-
     write_html_to_excel(nombre_carpeta, html)
 
 
