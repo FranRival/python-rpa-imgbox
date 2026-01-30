@@ -151,7 +151,10 @@ def subir_carpeta(driver, excel_path, folder):
 
     nombre_carpeta = os.path.basename(folder)
 
-    print(f"\n📁 Subiendo: {nombre_carpeta}")
+    # 🔹 NUEVO — ruta completa visible en CMD
+    print("\n📁 SUBCARPETA ACTUAL (RUTA COMPLETA):")
+    print(folder)
+
     print(f"📦 Archivos: {len(archivos)}")
 
     driver.get(IMGBOX_URL)
@@ -188,7 +191,10 @@ def main():
     batch_root = sys.argv[1]
 
     print("\n🚀 INICIANDO UPLOADER")
-    print(f"📂 Batch activo: {batch_root}")
+
+    # 🔹 NUEVO — ruta completa del batch visible
+    print("📂 RUTA COMPLETA DEL BATCH:")
+    print(batch_root)
 
     excel_path = get_excel_path(batch_root)
     print(f"📊 Excel del batch: {excel_path}")
