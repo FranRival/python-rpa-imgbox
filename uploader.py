@@ -4,7 +4,7 @@ import time
 import traceback
 from pathlib import Path
 
-# 🔒 EVITA CONGELAMIENTO DE CMD (stdin fantasma)
+# 🔥 EVITA BLOQUEOS DE CMD / .BAT
 sys.stdin = open(os.devnull)
 
 from selenium import webdriver
@@ -20,25 +20,14 @@ from openpyxl import Workbook, load_workbook
 # =========================
 # CONFIGURACIÓN
 # =========================
-RUTA_BATCH_TXT = r"C:\Users\dell\Desktop\batch-ruta.txt"
+
 IMGBOX_URL = "https://imgbox.com/upload"
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
-
-EXCEL_PATH = r"C:\Users\dell\Desktop\result.xlsx"
-SHEET_NAME = "Sheet1"
 
 
 # =========================
 # UTILIDADES
 # =========================
-
-def leer_ruta_actual():
-    with open(RUTA_BATCH_TXT, "r", encoding="utf-8") as f:
-        ruta = f.readline().strip()
-    if not ruta or not os.path.isdir(ruta):
-        raise Exception(f"Ruta inválida en batch-ruta.txt: {ruta}")
-    return ruta
-
 
 def obtener_subcarpetas(root):
     return [
@@ -49,27 +38,25 @@ def obtener_subcarpetas(root):
 
 
 # =========================
-# EXCEL
+# EXCEL (1 ARCHIVO POR BATCH)
 # =========================
 
-def ensure_excel(path, sheet_name):
+def get_excel_path(batch_root):
+    batch_name = os.path.basename(batch_root.rstrip("\\/"))
+    return os.path.join(batch_root, f"{batch_name}.xlsx")
+
+
+def ensure_excel(path):
     if not os.path.exists(path):
         wb = Workbook()
         ws = wb.active
-        ws.title = sheet_name
+        ws.title = "Sheet1"
         wb.save(path)
-
-    wb = load_workbook(path)
-    if sheet_name not in wb.sheetnames:
-        wb.create_sheet(sheet_name)
-
-    return wb
+    return load_workbook(path)
 
 
-def find_or_create_column(wb, sheet_name, header):
-    ws = wb[sheet_name]
+def find_or_create_column(ws, header):
     max_col = ws.max_column
-
     for col in range(1, max_col + 1):
         if (ws.cell(row=1, column=col).value or "").strip() == header:
             return col
@@ -79,15 +66,15 @@ def find_or_create_column(wb, sheet_name, header):
     return new_col
 
 
-def write_html_to_excel(header, html):
-    wb = ensure_excel(EXCEL_PATH, SHEET_NAME)
-    ws = wb[SHEET_NAME]
+def write_html_to_excel(excel_path, folder_name, html):
+    wb = ensure_excel(excel_path)
+    ws = wb["Sheet1"]
 
-    col = find_or_create_column(wb, SHEET_NAME, header)
+    col = find_or_create_column(ws, folder_name)
     ws.cell(row=2, column=col, value=html)
 
-    wb.save(EXCEL_PATH)
-    print(f"💾 HTML guardado en Excel → columna: {header}")
+    wb.save(excel_path)
+    print(f"💾 Excel actualizado → {excel_path} | Columna: {folder_name}")
 
 
 # =========================
@@ -104,9 +91,7 @@ def init_driver():
 
 
 def seleccionar_adult_content(driver):
-    print("🔞 Forzando Adult Content (JS)...")
     time.sleep(2)
-
     driver.execute_script("""
         try {
             var s = document.getElementById('dropdown-content-type');
@@ -114,59 +99,46 @@ def seleccionar_adult_content(driver):
                 s.value = '2';
                 s.dispatchEvent(new Event('change', { bubbles: true }));
             }
-
             if (typeof $ !== 'undefined' && $.fn.selectpicker) {
                 $('#dropdown-content-type').selectpicker('val','2');
                 $('#dropdown-content-type').selectpicker('refresh');
             }
         } catch(e) {}
     """)
-
     time.sleep(1)
-    print("✅ Adult Content configurado")
 
 
 # =========================
-# ESPERA REAL
+# ESPERA REAL (SIN TIMEOUT)
 # =========================
 
 def extract_fullsize_html(driver):
     try:
-        areas = driver.find_elements(By.TAG_NAME, "textarea")
-        for a in areas:
+        for a in driver.find_elements(By.TAG_NAME, "textarea"):
             val = (a.get_attribute("value") or "").strip()
             lower = val.lower()
-            if (
-                val
-                and "<a " in val
-                and "<img " in val
-                and "imgbox.com" in lower
-                and "thumb" not in lower
-            ):
+            if val and "<img" in val and "imgbox.com" in lower and "thumb" not in lower:
                 return val
     except:
         pass
-
     return ""
 
 
 def esperar_html_final(driver):
     print("⌛ Esperando HTML FINAL...")
-
     while True:
         html = extract_fullsize_html(driver)
         if html:
-            print("✅ HTML detectado — subida confirmada")
+            print("✅ HTML detectado")
             return html
-
         time.sleep(3)
 
 
 # =========================
-# PROCESO PRINCIPAL
+# PROCESO DE SUBIDA
 # =========================
 
-def subir_carpeta(driver, folder):
+def subir_carpeta(driver, excel_path, folder):
     archivos = [
         os.path.join(folder, f)
         for f in os.listdir(folder)
@@ -179,7 +151,7 @@ def subir_carpeta(driver, folder):
 
     nombre_carpeta = os.path.basename(folder)
 
-    print(f"\n📁 Subiendo carpeta: {nombre_carpeta}")
+    print(f"\n📁 Subiendo: {nombre_carpeta}")
     print(f"📦 Archivos: {len(archivos)}")
 
     driver.get(IMGBOX_URL)
@@ -192,48 +164,55 @@ def subir_carpeta(driver, folder):
         EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
     )
 
-    print("📤 Enviando archivos...")
     input_file.send_keys("\n".join(archivos))
     time.sleep(2)
 
-    print("🚀 Iniciando upload...")
     start_btn = wait.until(
         EC.element_to_be_clickable((By.ID, "fake-submit-button"))
     )
     driver.execute_script("arguments[0].click();", start_btn)
 
     html = esperar_html_final(driver)
-    write_html_to_excel(nombre_carpeta, html)
+    write_html_to_excel(excel_path, nombre_carpeta, html)
 
+
+# =========================
+# MAIN
+# =========================
 
 def main():
+    if len(sys.argv) < 2:
+        print("❌ No se recibió ruta del batch")
+        sys.exit(1)
+
+    batch_root = sys.argv[1]
+
     print("\n🚀 INICIANDO UPLOADER")
+    print(f"📂 Batch activo: {batch_root}")
 
-    root = leer_ruta_actual()
-    print(f"📂 Batch activo: {root}")
+    excel_path = get_excel_path(batch_root)
+    print(f"📊 Excel del batch: {excel_path}")
 
-    carpetas = obtener_subcarpetas(root)
-    print(f"📊 Total de carpetas a subir: {len(carpetas)}")
+    carpetas = obtener_subcarpetas(batch_root)
+    print(f"📁 Total carpetas: {len(carpetas)}")
 
     driver = init_driver()
 
     try:
         for idx, carpeta in enumerate(carpetas, 1):
-            print("\n==============================")
-            print(f"➡️ Carpeta {idx}/{len(carpetas)}")
-            subir_carpeta(driver, carpeta)
+            print(f"\n➡️ {idx}/{len(carpetas)}")
+            subir_carpeta(driver, excel_path, carpeta)
 
-        print("\n🏁 TODAS LAS CARPETAS DEL BATCH FINALIZADAS")
+        print("\n🏁 BATCH COMPLETADO")
 
     except Exception:
-        print("\n❌ ERROR CRÍTICO:")
+        print("\n❌ ERROR CRÍTICO")
         traceback.print_exc()
 
     finally:
-        print("\n🧹 Cerrando navegador...")
         time.sleep(5)
         driver.quit()
-        print("✅ Proceso terminado correctamente")
+        print("✅ Proceso terminado")
 
 
 if __name__ == "__main__":
