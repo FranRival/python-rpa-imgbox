@@ -7,10 +7,10 @@ import time
 # CONFIG
 # =========================
 
-START_URL = "https://www.poringa.net/buscar/?q=%40viejopaja45"
+START_URL = "https://www.poringa.net/buscar/?q=%40Gust19627379"
 POST_PATTERN = "/posts/imagenes/"
 OUTPUT_FILE = "links.txt"
-MAX_PAGES = 14          # límite de seguridad
+MAX_PAGES = 32          # límite de seguridad
 SLEEP_SECONDS = 1.2      # pausa entre requests
 MAX_EMPTY_PAGES = 3      # cortar si ya no hay contenido nuevo
 

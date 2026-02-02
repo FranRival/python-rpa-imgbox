@@ -10,7 +10,7 @@ OUTPUT_FILE = Path.home() / "Desktop" / "estructura.xlsx"
 # -----------------------------
 # CONSTANTES
 # -----------------------------
-IGNORE_SHEETS = {"febrero"}
+IGNORE_SHEETS = {"basura"}
 
 FIGURE_TEMPLATE = (
     '<figure class="wp-block-image size-large">'

@@ -7,7 +7,7 @@ import time
 # =========================
 # CONFIGURACIÓN
 # =========================
-BASE_DIR = r"C:\Users\dell\Downloads\febrero"
+BASE_DIR = r"C:\Users\dell\Downloads\pruebas"
 LINKS_FILE = "links.txt"
 SIN_H1_FILE = "sin_h1_urls.txt"
 TIMEOUT = 30
@@ -36,7 +36,7 @@ with open(LINKS_FILE, "r", encoding="utf-8") as f:
 print(f"🔗 URLs detectadas: {len(urls)}")
 print(f"📁 Carpeta destino: {BASE_DIR}")
 
-# Limpiar archivo de URLs sin H1
+# Limpiar archivo de URLs sin H1/TITLE
 open(SIN_H1_FILE, "w", encoding="utf-8").close()
 
 # =========================
@@ -58,17 +58,24 @@ for i, url in enumerate(urls, 1):
         soup = BeautifulSoup(html, "html.parser")
 
         h1 = soup.find("h1")
+        title = soup.find("title")
 
-        # --- NUEVA LOGICA ---
-        if not h1:
-            print("⚠️ No se encontró H1. URL enviada a sin_h1_urls.txt")
-
+        # -------------------------
+        # LÓGICA CORREGIDA
+        # -------------------------
+        if h1 and h1.get_text(strip=True):
+            nombre_base = h1.get_text()
+            origen = "H1"
+        elif title and title.get_text(strip=True):
+            nombre_base = title.get_text()
+            origen = "TITLE"
+        else:
+            print("⚠️ No se encontró H1 ni TITLE. URL enviada a sin_h1_urls.txt")
             with open(SIN_H1_FILE, "a", encoding="utf-8") as f:
                 f.write(url + "\n")
+            continue
 
-            continue   # Saltar esta URL completamente
-
-        nombre_carpeta = limpiar_nombre(h1.get_text())
+        nombre_carpeta = limpiar_nombre(nombre_base)
 
         ruta_carpeta = os.path.join(BASE_DIR, nombre_carpeta)
         os.makedirs(ruta_carpeta, exist_ok=True)
@@ -78,7 +85,7 @@ for i, url in enumerate(urls, 1):
         with open(ruta_html, "w", encoding="utf-8") as f:
             f.write(html)
 
-        print(f"✅ Carpeta creada: {ruta_carpeta}")
+        print(f"✅ Carpeta creada ({origen}): {ruta_carpeta}")
 
         time.sleep(DELAY)
 

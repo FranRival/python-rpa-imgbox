@@ -7,7 +7,7 @@ import requests
 # =========================
 # CONFIGURACIÓN
 # =========================
-BASE_DIR = r"C:\Users\dell\Downloads\febrero"
+BASE_DIR = r"C:\Users\dell\Downloads\marzo\aaa\a1"
 TIMEOUT = 40
 DELAY = 0.4
 
