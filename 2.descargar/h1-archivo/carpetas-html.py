@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 # =========================
 # CONFIGURACIÓN
 # =========================
-BASE_DIR = r"C:\Users\dell\Downloads\marzo\aaa\a2"
+BASE_DIR = r"C:\Users\dell\Downloads\marzo\aaa\76"
 LINKS_FILE = "links.txt"
 TIMEOUT = 30
 DELAY = 1.2   # 🔴 importante para no bloquear tan rápido
