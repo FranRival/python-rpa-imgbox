@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 # =========================
 # CONFIGURACIÓN
 # =========================
-BASE_DIR = r"C:\Users\dell\Downloads\carpeta_universal"
+BASE_DIR = r"C:\Users\dell\Downloads\marzo\aaa"
 TIMEOUT = 40
 DELAY = 0.4
 
