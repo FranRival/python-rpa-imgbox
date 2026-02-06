@@ -8,7 +8,6 @@ from urllib.parse import urlparse
 # CONFIGURACIÓN
 # =========================
 BASE_DIR = r"C:\Users\dell\Downloads\marzo\aaa"
-TIMEOUT = 40
 DELAY = 0.4
 
 BASE_HEADERS = {
@@ -31,16 +30,33 @@ def construir_referer_desde_imagen(img_url):
     parsed = urlparse(img_url)
     return f"{parsed.scheme}://{parsed.netloc}/"
 
-def descargar_imagen(url, destino):
+def descargar_imagen(url, destino, reintentos=2):
     headers = BASE_HEADERS.copy()
     headers["Referer"] = construir_referer_desde_imagen(url)
 
-    with session.get(url, headers=headers, timeout=TIMEOUT, stream=True) as r:
-        r.raise_for_status()
-        with open(destino, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
+    for intento in range(1, reintentos + 1):
+        try:
+            with session.get(
+                url,
+                headers=headers,
+                timeout=(10, 20),  # connect, read
+                stream=True
+            ) as r:
+                r.raise_for_status()
+
+                with open(destino, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if not chunk:
+                            break
+                        f.write(chunk)
+
+                r.close()
+                return  # éxito
+
+        except Exception as e:
+            if intento == reintentos:
+                raise e
+            time.sleep(1.5)
 
 def nombre_archivo_desde_url(url, index):
     nombre = os.path.basename(urlparse(url).path)
@@ -67,8 +83,7 @@ for root, dirs, files in os.walk(BASE_DIR):
         continue
 
     html_path = os.path.join(root, "source.html")
-
-    print(f"\n📂 Procesando carpeta: {root}")
+    print(f"\n📂 Procesando: {root}")
 
     try:
         with open(html_path, "r", encoding="utf-8", errors="ignore") as f:
