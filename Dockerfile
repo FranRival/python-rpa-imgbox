@@ -16,4 +16,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Ejecutar cualquier script Python
-ENTRYPOINT ["python"]
+ENTRYPOINT ["python", "crop.py"]
