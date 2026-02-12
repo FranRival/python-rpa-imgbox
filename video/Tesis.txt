@@ -1,0 +1,22 @@
+*****este archivo python fue copiado directamente del archivo funcional de descargas de html con imagenes y codigo source.html. Esta es la estructura de imagenes.
+
+
+leer txt
+↓
+crear carpeta
+↓
+descargar HTML
+↓
+guardar source
+
+
+
+Nuevo codigo:
+
+leer txt
+↓
+extraer nombre del mp4
+↓
+descargar en stream
+↓
+guardar binario
