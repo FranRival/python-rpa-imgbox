@@ -24,6 +24,27 @@ guardar binario
 
 *****el proceso de este codigo, no crea las carpetas usando el H1. ni descarga el codigo HTML.
 
+Este es el nuevo flujo:
+
+links.txt (URL de página)
+↓
+descargar HTML
+↓
+extraer <h1>
+↓
+limpiar título
+↓
+crear nombre seguro
+↓
+buscar URL del mp4 dentro del HTML
+↓
+descargar mp4
+↓
+guardar con nombre basado en H1
+
+
+***Proximo cambio, necesitamos el thumbnail del video.
+
 -------------------------------------------------------
 🔥 CAMBIO 1 — Ya no necesitamos HTML ni BeautifulSoup
 
