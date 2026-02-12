@@ -20,3 +20,122 @@ extraer nombre del mp4
 descargar en stream
 ↓
 guardar binario
+
+
+*****el proceso de este codigo, no crea las carpetas usando el H1. ni descarga el codigo HTML.
+
+-------------------------------------------------------
+🔥 CAMBIO 1 — Ya no necesitamos HTML ni BeautifulSoup
+
+Eliminarías:
+
+from bs4 import BeautifulSoup
+
+
+Y también eliminarías toda esta parte:
+
+# Guardar HTML SIEMPRE
+ruta_html = os.path.join(ruta_carpeta, "source.html")
+with open(ruta_html, "w", encoding="utf-8") as f:
+    f.write(response.text)
+
+
+Porque ya no trabajamos con HTML.
+
+🔥 CAMBIO 2 — Ya no necesitamos extraer H1
+
+Eliminarías:
+
+limpiar_nombre() si solo vas a usar nombre desde URL.
+
+nombre_desde_url() puede mantenerse (pero adaptado).
+
+Toda lógica relacionada a H1.
+
+🔥 CAMBIO 3 — El request debe ser en modo stream
+
+ANTES:
+
+response = session.get(url, timeout=TIMEOUT)
+
+
+AHORA debe ser:
+
+response = session.get(url, timeout=TIMEOUT, stream=True)
+
+
+Esto es obligatorio para video.
+
+🔥 CAMBIO 4 — Guardar en chunks (lo más importante)
+
+ANTES guardabas texto:
+
+f.write(response.text)
+
+
+AHORA debes guardar binario:
+
+with open(ruta_video, "wb") as f:
+    for chunk in response.iter_content(chunk_size=1024 * 1024):
+        if chunk:
+            f.write(chunk)
+
+
+Esto descarga 1MB por bloque.
+
+🔥 CAMBIO 5 — Obtener nombre del archivo desde la URL
+
+Tu función actual:
+
+def nombre_desde_url(url):
+
+
+Sigue sirviendo.
+
+Pero ahora:
+
+Debe conservar .mp4
+
+No reemplazarlo
+
+No eliminar extensión
+
+Antes limpiabas .html.
+Eso ya no aplica.
+
+🔥 CAMBIO 6 — Ya no necesitas crear carpeta por URL (opcional)
+
+Si quieres algo simple:
+
+ruta_video = os.path.join(BASE_DIR, nombre_archivo)
+
+
+Sin subcarpetas.
+
+🔥 CAMBIO 7 — Manejo de archivos grandes
+
+Opcional pero recomendable:
+
+Verificar que realmente sea mp4:
+
+if "video" not in response.headers.get("Content-Type", ""):
+    print("⚠️ No parece un video real")
+
+
+Esto evita guardar HTML como mp4 si el servidor responde error 403.
+
+🔥 CAMBIO 8 — Ajustar DELAY
+
+Antes:
+
+DELAY = 1.2
+
+
+Para mp4 grandes puedes usar:
+
+DELAY = 2
+
+
+Porque cada request durará mucho más tiempo.
+
+****Hecho por ChatGPT, no por mi------------
