@@ -4,8 +4,8 @@ from pathlib import Path
 # -----------------------------
 # RUTAS
 # -----------------------------
-INPUT_FILE = Path(r"C:\Users\dell\Downloads\proceso\10.xlsx")
-OUTPUT_FILE = Path.home() / "Desktop" / "estructura.xlsx"
+INPUT_FILE = Path(r"C:\Users\dell\Downloads\proceso\11.xlsx")
+OUTPUT_FILE = Path.home() / "Desktop" / INPUT_FILE.name
 
 # -----------------------------
 # CONSTANTES
