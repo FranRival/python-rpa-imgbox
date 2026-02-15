@@ -2,7 +2,7 @@ import re
 from openpyxl import load_workbook
 
 # ================= CONFIG =================
-EXCEL_FILE = "batchproceso.xlsx"
+EXCEL_FILE = "10.xlsx"
 
 SHEETS = ["Sheet1"]
 # =========================================
