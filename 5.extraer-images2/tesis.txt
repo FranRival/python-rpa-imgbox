@@ -1,0 +1,1 @@
+***1. hay que copiar este python a la carpeta donde estan todas los archivos de excel. asi solo cambiamos el nombre.

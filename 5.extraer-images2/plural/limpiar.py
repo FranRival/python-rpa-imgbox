@@ -4,7 +4,11 @@ from openpyxl import load_workbook
 # ================= CONFIG =================
 EXCEL_FILE = "batchproceso.xlsx"
 
-SHEETS = ["Sheet1"]
+SHEETS = [
+    "batch1", "batch2", "batch3", "batch4",
+    "batch5", "batch6", "batch7", "batch8",
+    "febrero"
+]
 # =========================================
 
 
