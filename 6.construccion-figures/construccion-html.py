@@ -4,7 +4,7 @@ from pathlib import Path
 # -----------------------------
 # RUTAS
 # -----------------------------
-INPUT_FILE = Path(r"C:\Users\dell\Downloads\proceso\11.xlsx")
+INPUT_FILE = Path(r"C:\Users\dell\Downloads\proceso-elminar\10.xlsx")
 OUTPUT_FILE = Path.home() / "Desktop" / INPUT_FILE.name
 
 # -----------------------------
