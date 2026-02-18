@@ -3,12 +3,12 @@ from bs4 import BeautifulSoup
 import os
 import re
 import time
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 # =========================
 # CONFIGURACIÓN
 # =========================
-BASE_DIR = r"C:\Users\dell\Downloads\marzo\aaa\134"
+BASE_DIR = r"C:\Users\dell\Desktop\uploader\video"
 LINKS_FILE = "links.txt"
 TIMEOUT = 60
 DELAY = 2
@@ -23,24 +23,14 @@ def limpiar_nombre(texto):
         return None
 
     texto = texto.strip()
-
-    # Eliminar saltos de línea
     texto = re.sub(r'[\r\n]+', ' ', texto)
-
-    # Quitar caracteres inválidos en Windows
     texto = re.sub(r'[\\/:*?"<>|]', '', texto)
-
-    # Quitar espacios múltiples
     texto = re.sub(r'\s+', ' ', texto).strip()
 
-    # Limitar longitud
     return texto[:140]
 
 
 def nombre_unico(ruta_base):
-    """
-    Si el archivo existe, agrega (1), (2), etc.
-    """
     if not os.path.exists(ruta_base):
         return ruta_base
 
@@ -55,13 +45,11 @@ def nombre_unico(ruta_base):
 
 
 def extraer_mp4(soup, base_url):
-    # Buscar en etiquetas <video> y <source>
     for tag in soup.find_all(["video", "source"]):
         src = tag.get("src")
         if src and ".mp4" in src:
             return urljoin(base_url, src)
 
-    # Buscar cualquier .mp4 en el HTML
     for a in soup.find_all("a"):
         href = a.get("href")
         if href and ".mp4" in href:
@@ -84,7 +72,9 @@ print(f"📁 Carpeta destino: {BASE_DIR}")
 # =========================
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Connection": "keep-alive"
 })
 
 # =========================
@@ -109,7 +99,7 @@ for i, url in enumerate(urls, 1):
             print("⚠️ No se encontró H1. Usando nombre alternativo.")
             titulo = f"video_{i}"
 
-        # 3️⃣ Buscar mp4 en HTML
+        # 3️⃣ Buscar mp4
         mp4_url = extraer_mp4(soup, url)
 
         if not mp4_url:
@@ -118,8 +108,36 @@ for i, url in enumerate(urls, 1):
 
         print(f"🎬 MP4 encontrado: {mp4_url}")
 
-        # 4️⃣ Descargar MP4 en stream
-        video_response = session.get(mp4_url, timeout=TIMEOUT, stream=True)
+        # Generar referer base (solo dominio raíz)
+        parsed = urlparse(url)
+        referer_base = f"{parsed.scheme}://{parsed.netloc}/"
+
+        # 🔎 Prueba HEAD
+        print("🔎 Probando HEAD request...")
+        test_head = session.head(
+            mp4_url,
+            headers={"Referer": referer_base},
+            allow_redirects=True
+        )
+        print("Status HEAD:", test_head.status_code)
+        print("Final URL:", test_head.url)
+
+        # 4️⃣ Descargar MP4 con headers correctos
+        headers_video = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+            "Referer": referer_base,
+            "Accept": "*/*",
+            "Range": "bytes=0-"
+        }
+
+        video_response = session.get(
+            mp4_url,
+            headers=headers_video,
+            timeout=TIMEOUT,
+            stream=True,
+            allow_redirects=True
+        )
+
         video_response.raise_for_status()
 
         content_type = video_response.headers.get("Content-Type", "")
