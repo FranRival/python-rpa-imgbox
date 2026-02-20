@@ -1,13 +1,12 @@
 import os
 import shutil
 import re
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext
 
 # ================= CONFIG =================
-ROOT_DIR = r"C:\Users\dell\Downloads\marzo\aaa\107"
-BASURA_DIR = os.path.join(ROOT_DIR, "basura")
-
-DRY_RUN = False   # True = simula | False = ejecuta
-MIN_BYTES = 1024  # 1 KB
+DRY_RUN = False
+MIN_BYTES = 1024
 
 BASURA_PATTERNS = re.compile(
     r"(apple|touch|icon|placeholder|mx|sprite|thumb|logo|\d{2,4}x\d{2,4})",
@@ -16,13 +15,15 @@ BASURA_PATTERNS = re.compile(
 
 # ==========================================
 
+def log(msg):
+    output.insert(tk.END, msg + "\n")
+    output.see(tk.END)
+    root.update()
 
-def ensure_basura_dir():
-    if DRY_RUN:
-        print(f"[SIMULADO] Crear carpeta basura: {BASURA_DIR}")
-    else:
-        os.makedirs(BASURA_DIR, exist_ok=True)
-
+def ensure_basura_dir(root_dir):
+    basura_dir = os.path.join(root_dir, "basura")
+    os.makedirs(basura_dir, exist_ok=True)
+    return basura_dir
 
 def es_basura(filename, fullpath):
     try:
@@ -38,10 +39,9 @@ def es_basura(filename, fullpath):
 
     return False
 
-
-def mover_a_basura(src):
+def mover_a_basura(src, basura_dir):
     name = os.path.basename(src)
-    dst = os.path.join(BASURA_DIR, name)
+    dst = os.path.join(basura_dir, name)
 
     base, ext = os.path.splitext(dst)
     counter = 1
@@ -49,12 +49,8 @@ def mover_a_basura(src):
         dst = f"{base}_{counter}{ext}"
         counter += 1
 
-    if DRY_RUN:
-        print(f"[SIMULADO] Basura: {src} → {dst}")
-    else:
-        shutil.move(src, dst)
-        print(f"   🗑️ Basura movida: {dst}")
-
+    shutil.move(src, dst)
+    log(f"   🗑️ Basura movida: {dst}")
 
 def mover_seguro(src, dst):
     base, ext = os.path.splitext(dst)
@@ -64,21 +60,17 @@ def mover_seguro(src, dst):
         dst = f"{base}_{counter}{ext}"
         counter += 1
 
-    if DRY_RUN:
-        print(f"[SIMULADO] {src} → {dst}")
-    else:
-        shutil.move(src, dst)
+    shutil.move(src, dst)
 
+def procesar_carpeta_post(post_path, basura_dir):
+    log(f"\n📂 Procesando: {post_path}")
 
-def procesar_carpeta_post(post_path):
-    print(f"\n📂 Procesando: {post_path}")
-
-    # ---------- 1. Aplanar subcarpetas ----------
+    # Aplanar subcarpetas
     for item in os.listdir(post_path):
         item_path = os.path.join(post_path, item)
 
         if os.path.isdir(item_path):
-            print(f"   🔽 Aplanando subcarpeta: {item}")
+            log(f"   🔽 Aplanando subcarpeta: {item}")
 
             for file in os.listdir(item_path):
                 src = os.path.join(item_path, file)
@@ -87,17 +79,13 @@ def procesar_carpeta_post(post_path):
                 if os.path.isfile(src):
                     mover_seguro(src, dst)
 
-            # eliminar subcarpeta vacía
-            if DRY_RUN:
-                print(f"   [SIMULADO] Borrar carpeta: {item_path}")
-            else:
-                try:
-                    shutil.rmtree(item_path)
-                    print(f"   🗑️ Subcarpeta eliminada")
-                except Exception as e:
-                    print(f"   ⚠️ Error borrando carpeta: {e}")
+            try:
+                shutil.rmtree(item_path)
+                log(f"   🗑️ Subcarpeta eliminada")
+            except Exception as e:
+                log(f"   ⚠️ Error borrando carpeta: {e}")
 
-    # ---------- 2. Mover basura ----------
+    # Mover basura
     for file in os.listdir(post_path):
         file_path = os.path.join(post_path, file)
 
@@ -105,24 +93,59 @@ def procesar_carpeta_post(post_path):
             continue
 
         if es_basura(file, file_path):
-            mover_a_basura(file_path)
+            mover_a_basura(file_path, basura_dir)
 
+def ejecutar():
+    root_dir = ruta_entry.get().strip()
 
-# ================= EJECUCIÓN =================
+    if not os.path.isdir(root_dir):
+        messagebox.showerror("Error", "Ruta inválida")
+        return
 
-print("🚀 Iniciando limpieza...\n")
-ensure_basura_dir()
+    output.delete(1.0, tk.END)
+    log("🚀 Iniciando limpieza...\n")
 
-for folder in os.listdir(ROOT_DIR):
-    folder_path = os.path.join(ROOT_DIR, folder)
+    basura_dir = ensure_basura_dir(root_dir)
 
-    # Ignorar carpeta basura
-    if folder.lower() == "basura":
-        continue
+    for folder in os.listdir(root_dir):
+        folder_path = os.path.join(root_dir, folder)
 
-    if not os.path.isdir(folder_path):
-        continue
+        if folder.lower() == "basura":
+            continue
 
-    procesar_carpeta_post(folder_path)
+        if not os.path.isdir(folder_path):
+            continue
 
-print("\n✅ Limpieza finalizada.")
+        procesar_carpeta_post(folder_path, basura_dir)
+
+    log("\n✅ Limpieza finalizada.")
+    messagebox.showinfo("Listo", "Proceso terminado.")
+
+def seleccionar_carpeta():
+    folder = filedialog.askdirectory()
+    if folder:
+        ruta_entry.delete(0, tk.END)
+        ruta_entry.insert(0, folder)
+
+# ================= GUI =================
+
+root = tk.Tk()
+root.title("Limpieza de Carpetas")
+root.geometry("700x500")
+
+frame = tk.Frame(root)
+frame.pack(pady=10)
+
+ruta_entry = tk.Entry(frame, width=60)
+ruta_entry.pack(side=tk.LEFT, padx=5)
+
+btn_browse = tk.Button(frame, text="Seleccionar", command=seleccionar_carpeta)
+btn_browse.pack(side=tk.LEFT)
+
+btn_run = tk.Button(root, text="Ejecutar Limpieza", command=ejecutar, bg="green", fg="white")
+btn_run.pack(pady=10)
+
+output = scrolledtext.ScrolledText(root, width=80, height=20)
+output.pack(padx=10, pady=10)
+
+root.mainloop()

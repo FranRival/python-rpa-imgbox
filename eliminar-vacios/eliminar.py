@@ -5,7 +5,7 @@ import shutil
 # CONFIGURACIÓN
 # =========================
 
-CARPETA_MADRE = r"C:\Users\dell\Downloads\marzo\aaa\107"
+CARPETA_MADRE = r"C:\Users\dell\Downloads\marzo\aaa\17"
 NOMBRE_BASURA = "basura"
 ARCHIVO_OBJETIVO = "source.html"
 
