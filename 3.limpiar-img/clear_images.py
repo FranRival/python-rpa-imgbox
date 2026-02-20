@@ -144,7 +144,6 @@ def seleccionar_carpeta():
         ruta_entry.delete(0, tk.END)
         ruta_entry.insert(0, folder)
 
-
 # ================= GUI =================
 
 root = tk.Tk()
