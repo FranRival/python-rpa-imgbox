@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 import re
 import tkinter as tk
@@ -15,15 +16,26 @@ BASURA_PATTERNS = re.compile(
 
 # ==========================================
 
+# 🔹 Soporte para icono en .exe (PyInstaller)
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS  # Cuando está empaquetado
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+
 def log(msg):
     output.insert(tk.END, msg + "\n")
     output.see(tk.END)
     root.update()
 
+
 def ensure_basura_dir(root_dir):
     basura_dir = os.path.join(root_dir, "basura")
     os.makedirs(basura_dir, exist_ok=True)
     return basura_dir
+
 
 def es_basura(filename, fullpath):
     try:
@@ -39,6 +51,7 @@ def es_basura(filename, fullpath):
 
     return False
 
+
 def mover_a_basura(src, basura_dir):
     name = os.path.basename(src)
     dst = os.path.join(basura_dir, name)
@@ -52,6 +65,7 @@ def mover_a_basura(src, basura_dir):
     shutil.move(src, dst)
     log(f"   🗑️ Basura movida: {dst}")
 
+
 def mover_seguro(src, dst):
     base, ext = os.path.splitext(dst)
     counter = 1
@@ -61,6 +75,7 @@ def mover_seguro(src, dst):
         counter += 1
 
     shutil.move(src, dst)
+
 
 def procesar_carpeta_post(post_path, basura_dir):
     log(f"\n📂 Procesando: {post_path}")
@@ -95,6 +110,7 @@ def procesar_carpeta_post(post_path, basura_dir):
         if es_basura(file, file_path):
             mover_a_basura(file_path, basura_dir)
 
+
 def ejecutar():
     root_dir = ruta_entry.get().strip()
 
@@ -121,17 +137,25 @@ def ejecutar():
     log("\n✅ Limpieza finalizada.")
     messagebox.showinfo("Listo", "Proceso terminado.")
 
+
 def seleccionar_carpeta():
     folder = filedialog.askdirectory()
     if folder:
         ruta_entry.delete(0, tk.END)
         ruta_entry.insert(0, folder)
 
+
 # ================= GUI =================
 
 root = tk.Tk()
 root.title("Limpieza de Carpetas")
 root.geometry("700x500")
+
+# 🔹 Intentar cargar icono
+try:
+    root.iconbitmap(resource_path("icon.ico"))
+except:
+    pass
 
 frame = tk.Frame(root)
 frame.pack(pady=10)
