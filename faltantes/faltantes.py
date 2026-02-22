@@ -3,14 +3,18 @@ import sys
 import shutil
 
 def main():
+
     if len(sys.argv) != 2:
-        print(r"Uso: python faltantes.py <C:\Users\dell\Desktop\listo\132\faltantes.txt>")
+        print("Uso:")
+        print(r"faltantes.exe <C:\Ruta\al\faltantes.txt>")
+        input("\nPresiona ENTER para salir...")
         return
 
     txt_path = sys.argv[1]
 
     if not os.path.isfile(txt_path):
         print("El archivo faltantes.txt no existe.")
+        input("\nPresiona ENTER para salir...")
         return
 
     base_dir = os.path.dirname(os.path.abspath(txt_path))
@@ -41,6 +45,7 @@ def main():
                 print(f"OK (está en lista): {item}")
 
     print("\nProceso terminado.")
+    input("\nPresiona ENTER para salir...")
 
 if __name__ == "__main__":
     main()
