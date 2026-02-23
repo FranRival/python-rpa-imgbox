@@ -523,6 +523,666 @@ Esta versión evoluciona el script de una herramienta de una sola hoja a un sist
 Esta versión convierte el script en una herramienta batch multi-archivo (pero de hoja única), ideal para procesar múltiples proyectos automáticamente en una sola ejecución.
 
 
+## FUERA DE CARPETAS - Crop
+
+### 📌 Análisis del Script — Recorte Automático con Control de Resolución
+
+---
+
+### 1. Tipo de herramienta
+
+- Procesador batch de imágenes.
+- Recorte proporcional automático (crop simétrico).
+- Preserva estructura de carpetas (modo espejo).
+- Incluye validaciones de seguridad por resolución.
+
+---
+
+### 2. Configuración Principal
+
+- `CARPETA_ORIGEN`  
+  Carpeta raíz donde se encuentran las imágenes originales.
+
+- `CARPETA_DESTINO`  
+  Carpeta donde se guardarán las imágenes recortadas.
+
+- `PORCENTAJE_CORTE = 0.10`  
+  Recorta 10% por cada lado (izquierda, derecha, arriba y abajo).
+
+- `ANCHO_MINIMO = 600 px`  
+- `ALTO_MINIMO = 600 px`  
+  Evita procesar imágenes demasiado pequeñas.
+
+- `EXTENSIONES`  
+  Solo procesa `.jpg`, `.jpeg`, `.png`.
+
+---
+
+### 3. Lógica de Procesamiento
+
+#### A) Validación inicial
+- Abre la imagen con Pillow.
+- Obtiene ancho y alto.
+- Si la imagen es menor a la resolución mínima → se omite.
+
+---
+
+#### B) Cálculo del recorte
+- Calcula:
+  - `dx = ancho * 10%`
+  - `dy = alto * 10%`
+- Recorte simétrico desde los cuatro bordes.
+
+---
+
+#### C) Validación de seguridad extra
+Antes de recortar verifica que:
+
+- El tamaño final no quede por debajo de 600x600.
+- Si el recorte compromete la resolución mínima → se omite.
+
+Esto evita:
+- Imágenes demasiado pequeñas.
+- Recortes destructivos.
+
+---
+
+#### D) Crop real
+
+Se usa: crop_box = (dx, dy, ancho - dx, alto - dy)
+
+
+Resultado:
+- Recorte centrado.
+- Eliminación de márgenes laterales.
+- Mantiene proporción original.
+
+---
+
+### 4. Procesamiento Recursivo
+
+La función `recorrer_carpeta()`:
+
+- Usa `os.walk()` para recorrer subcarpetas.
+- Replica la estructura original en la carpeta destino.
+- Genera una estructura espejo automática.
+
+Ejemplo:
+
+origen/
+└── carpeta1/
+└── imagen.jpg
+
+destino/
+└── carpeta1/
+└── imagen.jpg
+
+
+---
+
+### 5. Manejo de Errores
+
+- Cada imagen se procesa dentro de `try/except`.
+- Si falla una imagen:
+  - Se imprime el error.
+  - El script continúa con las demás.
+- No detiene el procesamiento batch.
+
+---
+
+### 6. Tipo de Crop Aplicado
+
+✔ Crop proporcional  
+✔ Simétrico  
+✔ No redimensiona  
+✔ No reescala  
+✔ No deforma  
+✔ No altera calidad original  
+
+Es un recorte físico real, no un resize.
+
+---
+
+### 7. Arquitectura del Script
+
+Modelo modular:
+
+- `procesar_imagen()` → lógica individual.
+- `recorrer_carpeta()` → orquestador batch.
+- `if __name__ == "__main__"` → ejecución controlada.
+
+Permite evolucionar fácilmente hacia:
+
+- GUI
+- Versión .exe
+- Integración en pipeline mayor
+- Agregado de watermark
+- Soporte para porcentajes dinámicos
+
+---
+
+### 8. Resultado Final
+
+Convierte una carpeta completa de imágenes en una versión recortada:
+
+- Limpia márgenes automáticamente.
+- Mantiene resolución mínima segura.
+- Preserva estructura original.
+- Funciona como herramienta de saneamiento visual masivo.
+
+---
+
+### 🎯 Clasificación del Script
+
+Es una herramienta de:
+
+- Crop automático no destructivo en estructura
+- Procesamiento batch recursivo
+- Control de calidad por resolución
+- Optimización previa a publicación o subida masiva
+
+---
+
+### 📌 Análisis del Script — Limpieza Selectiva de Carpetas (Filtro por `source.html`) - eliminar-vacios
+
+---
+
+### 1. Tipo de herramienta
+
+- Script de saneamiento estructural.
+- Limpieza automática por condición exacta.
+- Clasificación de carpetas vacías funcionalmente.
+- Sistema de cuarentena mediante carpeta `basura`.
+
+---
+
+### 2. Configuración Principal
+
+- `CARPETA_MADRE`  
+  Carpeta raíz que contiene múltiples subcarpetas a evaluar.
+
+- `NOMBRE_BASURA = "basura"`  
+  Carpeta destino donde se moverán las carpetas descartadas.
+
+- `ARCHIVO_OBJETIVO = "source.html"`  
+  Archivo que define la condición exacta de descarte.
+
+---
+
+### 3. Lógica del Sistema
+
+El script evalúa **cada subcarpeta directa** dentro de `CARPETA_MADRE`.
+
+---
+
+### 4. Condición Exacta de Eliminación
+
+Una carpeta se mueve a `basura` únicamente si:
+
+- Contiene exactamente **1 archivo**
+- Y ese archivo es `source.html`
+
+Condición literal aplicada:
+
+len(archivos) == 1
+AND
+archivos[0].lower() == "source.html"
+
+
+Esto significa:
+
+- No debe haber imágenes
+- No debe haber carpetas internas
+- No debe haber archivos adicionales
+
+Es un filtro extremadamente preciso.
+
+---
+
+### 5. Flujo de Procesamiento
+
+#### A) Preparación
+- Crea la carpeta `basura` si no existe.
+- Evita errores si ya estaba creada.
+
+---
+
+#### B) Iteración
+- Usa `os.listdir()` sobre la carpeta madre.
+- Evalúa solo elementos que sean directorios.
+- Ignora explícitamente la carpeta `basura`.
+
+---
+
+#### C) Decisión
+
+Si cumple la condición:
+- Se mueve completamente la carpeta usando `shutil.move()`.
+
+Si no cumple:
+- Se conserva intacta.
+
+---
+
+### 6. Qué Está Detectando Realmente
+
+Este script identifica carpetas que:
+
+- Solo contienen el archivo base `source.html`.
+- No tienen imágenes descargadas.
+- No fueron procesadas correctamente.
+- Están incompletas o vacías operativamente.
+
+En términos prácticos:
+Detecta “carpetas fallidas”.
+
+---
+
+### 7. Seguridad del Sistema
+
+✔ No elimina definitivamente  
+✔ No borra archivos  
+✔ Solo mueve a carpeta de cuarentena  
+✔ No procesa subcarpetas profundas  
+✔ No afecta estructura interna válida  
+
+Es reversible.
+
+---
+
+### 8. Arquitectura del Script
+
+Modelo minimalista:
+
+- `limpiar_carpetas()` → lógica central
+- `if __name__ == "__main__"` → ejecución controlada
+
+No depende de librerías externas.
+No requiere entorno especial.
+Opera con librerías estándar (`os`, `shutil`).
+
+---
+
+### 9. Patrón de Uso Dentro del Pipeline
+
+Este script funciona como etapa de:
+
+- Validación post-descarga
+- Filtrado previo a subida
+- Limpieza antes de procesamiento masivo
+- Control de calidad estructural
+
+Encaja perfectamente entre:
+
+Descarga → Limpieza estructural → Subida / Procesamiento
+
+---
+
+### 🎯 Clasificación del Script
+
+Es una herramienta de:
+
+- Clasificación automática por condición exacta
+- Limpieza estructural no destructiva
+- Sistema de cuarentena reversible
+- Saneamiento de proyectos incompletos
+
+---
+
+### Resultado Final
+
+Después de ejecutarlo:
+
+- Las carpetas incompletas quedan centralizadas en `/basura`.
+- Las carpetas válidas permanecen intactas.
+- La estructura principal queda depurada y lista para continuar el pipeline.
+
+
+---
+
+### 📌 Análisis del Script — Mover Carpetas según `faltantes.txt` (Versión con Interfaz GUI) - faltantes
+
+---
+
+### 1. Tipo de herramienta
+
+- Clasificador automático de carpetas.
+- Basado en lista blanca (`faltantes.txt`).
+- Interfaz gráfica (Tkinter).
+- Sistema de movimiento seguro (no elimina, solo reubica).
+
+---
+
+### 2. Objetivo del Script
+
+Dado un archivo `faltantes.txt` con nombres válidos:
+
+- Mantiene las carpetas que coincidan con la lista.
+- Mueve las que NO estén en la lista a una carpeta llamada `Faltantes`.
+
+Es un sistema de filtrado inverso:
+La lista define qué debe quedarse.
+
+---
+
+### 3. Flujo General del Sistema
+
+#### Paso 1 — Selección del archivo
+El usuario selecciona `faltantes.txt` mediante un explorador.
+
+#### Paso 2 — Lectura de datos
+Se construye un `set()` con:
+
+nombres_validos = set(...)
+
+
+Ventaja:
+- Búsqueda extremadamente rápida (O(1)).
+- Ideal para grandes volúmenes de carpetas.
+
+---
+
+### 4. Lógica de Clasificación
+
+El script analiza todas las carpetas dentro del directorio donde está el `faltantes.txt`.
+
+Para cada carpeta:
+
+- Si es directorio
+- Y no es la carpeta `Faltantes`
+- Y su nombre NO está en `nombres_validos`
+
+Entonces:
+
+→ Se mueve a `/Faltantes`
+
+---
+
+### 5. Seguridad Implementada
+
+✔ No elimina nada  
+✔ No sobrescribe si ya existe en destino  
+✔ Evita mover la carpeta `Faltantes`  
+✔ Muestra reporte final detallado  
+
+Si una carpeta ya existía en destino:
+- Se agrega a lista de omitidas.
+- No se pierde información.
+
+---
+
+### 6. Reporte Final
+
+Al terminar muestra un resumen:
+
+- Carpetas movidas
+- Carpetas omitidas (ya existían en destino)
+
+Ejemplo conceptual:
+
+Proceso terminado.
+
+Carpetas movidas:
+['A1', 'A2', 'A3']
+
+Carpetas omitidas:
+['B1']
+
+
+---
+
+### 7. Arquitectura Modular
+
+Funciones separadas:
+
+- `procesar()` → lógica principal
+- `seleccionar_archivo()` → explorador
+- `ejecutar()` → puente entre GUI y lógica
+
+Separación clara entre:
+Interfaz y procesamiento.
+
+---
+
+### 8. Tipo de Clasificación que Realiza
+
+Este script implementa:
+
+- Validación por lista blanca.
+- Limpieza estructural inteligente.
+- Control de carpetas faltantes en proyectos grandes.
+
+Es especialmente útil cuando:
+
+- Tienes cientos de carpetas.
+- Solo algunas deben permanecer.
+- El resto son sobrantes, errores o duplicados.
+
+---
+
+### 9. Posición Dentro del Pipeline
+
+Encaja perfectamente después de:
+
+- Validación de Excel.
+- Comparación contra base de datos.
+- Detección de proyectos faltantes.
+
+Funciona como:
+
+Control estructural post-auditoría.
+
+---
+
+### 🎯 Clasificación del Script
+
+Es una herramienta de:
+
+- Filtro estructural por lista externa
+- Clasificación masiva automatizada
+- Limpieza no destructiva
+- Interfaz amigable para usuario no técnico
+
+---
+
+### Resultado Final
+
+Tras ejecutarlo:
+
+- Solo permanecen en la raíz las carpetas listadas en `faltantes.txt`.
+- Todas las demás quedan centralizadas en `/Faltantes`.
+- El sistema queda ordenado y coherente con la auditoría realizada.
+
+----
+
+### 📌 Análisis del Script — Optimización y Estandarización de Imágenes (Resize + Compresión Web) - size
+
+---
+
+### 1. Tipo de herramienta
+
+- Optimizador de imágenes para web.
+- Redimensionamiento condicional.
+- Conversión forzada a JPEG.
+- Compresión avanzada con parámetros optimizados.
+- Procesamiento batch en carpeta única.
+
+---
+
+### 2. Objetivo del Script
+
+Transformar imágenes originales en versiones:
+
+- Más ligeras
+- Estandarizadas en ancho
+- Compatibles con web
+- Optimizadas para carga rápida
+
+Todo se guarda en una subcarpeta llamada:
+
+New/
+
+
+---
+
+### 3. Configuración Principal
+
+- `carpeta_entrada`  
+  Carpeta base con imágenes originales.
+
+- `carpeta_salida = New`  
+  Subcarpeta automática dentro de la misma carpeta.
+
+- `max_ancho = 1200 px`  
+  Ancho máximo permitido.
+
+- `calidad = 75`  
+  Punto de equilibrio entre peso y calidad visual.
+
+---
+
+### 4. Lógica de Procesamiento
+
+#### A) Filtro de extensiones
+
+Procesa únicamente:
+
+- `.jpg`
+- `.jpeg`
+- `.png`
+
+---
+
+#### B) Conversión a RGB
+
+img = img.convert("RGB")
+
+
+Esto garantiza:
+
+- Eliminación de canal alpha.
+- Compatibilidad total con formato JPEG.
+- Evita errores al guardar PNG con transparencia.
+
+---
+
+#### C) Redimensionamiento Condicional
+
+Solo si:
+
+img.width > max_ancho
+
+
+Entonces:
+
+- Calcula ratio proporcional.
+- Mantiene proporción original.
+- Usa `Image.LANCZOS` (alta calidad).
+
+No amplía imágenes pequeñas.
+No deforma.
+No recorta.
+
+---
+
+### 5. Compresión Web Optimizada
+
+Al guardar usa:
+
+quality=75
+optimize=True
+progressive=True
+subsampling=2
+
+
+Significado:
+
+- `quality=75` → compresión eficiente sin degradación visible fuerte.
+- `optimize=True` → optimiza tablas Huffman.
+- `progressive=True` → carga progresiva en navegadores.
+- `subsampling=2` → compresión cromática eficiente.
+
+Esto lo convierte en un JPEG web-ready profesional.
+
+---
+
+### 6. Conversión Universal a JPG
+
+Independientemente del formato original:
+
+- Todos los archivos terminan como `.jpg`.
+- Uniformiza el output.
+- Ideal para WordPress y CDNs.
+
+---
+
+### 7. Reporte de Ahorro
+
+Después de procesar cada imagen:
+
+Muestra:
+
+imagen.png | 2450 KB → 480 KB
+
+
+Permite visualizar:
+
+- Reducción real de peso.
+- Impacto inmediato en rendimiento.
+
+---
+
+### 8. Arquitectura del Script
+
+- No es recursivo.
+- Procesa solo la carpeta raíz.
+- No replica estructura.
+- Genera carpeta destino automática.
+
+Modelo simple, directo y eficiente.
+
+---
+
+### 9. Posición Dentro del Pipeline
+
+Este script funciona como:
+
+- Etapa de optimización final antes de subir.
+- Paso previo a CDN.
+- Fase de preparación para publicación.
+- Reductor de peso para Core Web Vitals.
+
+Encaja después de:
+
+Recorte → Limpieza → Optimización → Subida
+
+---
+
+### 🎯 Clasificación del Script
+
+Es una herramienta de:
+
+- Normalización de resolución
+- Compresión inteligente
+- Estandarización de formato
+- Optimización web profesional
+- Reducción de peso masiva
+
+---
+
+### Resultado Final
+
+Tras ejecutarlo:
+
+- Todas las imágenes quedan en `/New`.
+- Ninguna supera 1200px de ancho.
+- Todas están en formato JPEG optimizado.
+- El peso se reduce significativamente.
+- Listas para publicación rápida y eficiente.
+
+----
+
+
 
 ## 📁 Estructura Actual del Proyecto `uploader/`
 
