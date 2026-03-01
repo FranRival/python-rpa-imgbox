@@ -2,7 +2,7 @@ import os
 from PIL import Image
 
 # === CONFIG ===
-carpeta_entrada = r"C:\Users\dell\Desktop\listo\108-1\AAA"
+carpeta_entrada = r"C:\Users\dell\Desktop\listo\200\AAA"
 carpeta_salida = os.path.join(carpeta_entrada, "New")
 
 max_ancho = 1200      # estándar recomendado

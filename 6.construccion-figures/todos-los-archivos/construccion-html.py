@@ -4,7 +4,7 @@ from pathlib import Path
 # -----------------------------
 # CARPETA DONDE ESTÁN LOS EXCEL
 # -----------------------------
-SOURCE_FOLDER = Path(r"C:\Users\dell\Downloads\proceso")
+SOURCE_FOLDER = Path(r"C:\Users\dell\Desktop\uploader\6.construccion-figures\todos-los-archivos")
 
 # Carpeta destino (puede ser la misma si quieres)
 DEST_FOLDER = Path.home() / "Desktop"
