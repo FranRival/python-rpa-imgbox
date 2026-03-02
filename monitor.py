@@ -4,8 +4,11 @@ import os
 import json
 import requests
 from datetime import datetime
+from pathlib import Path
 
-load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 API_URL = "https://api.emmanuelibarra.com/api/hours"
 
@@ -14,7 +17,7 @@ API_KEY = os.getenv('AUTOMATION_API_KEY')
 if not API_KEY:
     raise ValueError('AUTOMATION_API_KEY no encontrada en .env')
 
-DATA_FILE = "monitor_data.json"
+DATA_FILE = BASE_DIR / "monitor_data.json"
 INTERVAL_MINUTES = 10
 
 
