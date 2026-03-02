@@ -3,8 +3,6 @@ import sys
 import time
 import traceback
 from pathlib import Path
-import requests
-from datetime import datetime
 
 # 🔥 EVITA BLOQUEOS DE CMD / .BAT
 sys.stdin = open(os.devnull)
@@ -25,8 +23,7 @@ from openpyxl import Workbook, load_workbook
 
 IMGBOX_URL = "https://imgbox.com/upload"
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
-API_URL = "https://api.emmanuelibarra.com/api/hours"
-API_KEY = "TU_API_KEY_REAL"
+
 
 # =========================
 # UTILIDADES
@@ -182,36 +179,11 @@ def subir_carpeta(driver, excel_path, folder):
     write_html_to_excel(excel_path, nombre_carpeta, html)
 
 
-
-def enviar_horas_a_api(horas):
-    try:
-        hoy = datetime.now().strftime("%Y-%m-%d")
-
-        payload = {
-            "date": hoy,
-            "hours": horas
-        }
-
-        headers = {
-            "x-api-key": API_KEY,
-            "Content-Type": "application/json"
-        }
-
-        response = requests.post(API_URL, json=payload, headers=headers)
-
-        print("📡 Enviando datos a API...")
-        print("Status:", response.status_code)
-        print("Respuesta:", response.text)
-
-    except Exception as e:
-        print("❌ Error enviando a API:", e)
-
 # =========================
 # MAIN
 # =========================
 
 def main():
-    start_time = time.time()
     if len(sys.argv) < 2:
         print("❌ No se recibió ruta del batch")
         sys.exit(1)
@@ -245,15 +217,6 @@ def main():
 
     finally:
         time.sleep(5)
-
-        end_time = time.time()
-        duracion_horas = (end_time - start_time) / 3600
-
-        print(f"⏱ Horas trabajadas: {round(duracion_horas, 2)}")
-
-        if duracion_horas > 0:
-            enviar_horas_a_api(round(duracion_horas, 2))
-
         driver.quit()
         print("✅ Proceso terminado")
 
