@@ -8,8 +8,7 @@ from pathlib import Path
 
 SCRIPTS_MONITOREADOS = [
     "uploader.py",
-    "procesador.py",
-    "Otro_script.py"
+    "descargar.py"
 ]
 
 BASE_DIR = Path(__file__).resolve().parent
