@@ -28,18 +28,17 @@ INTERVAL_MINUTES = 10
 
 def algun_script_activo():
     try:
-        output = subprocess.check_output(
-            'wmic process where "name=\'python.exe\'" get CommandLine',
-            shell=True
-        ).decode()
+        cmd = 'powershell "Get-CimInstance Win32_Process | Where-Object {$_.Name -like \'python*\'} | Select-Object CommandLine"'
+        output = subprocess.check_output(cmd, shell=True).decode()
 
         for script in SCRIPTS_MONITOREADOS:
-            if script in output:
+            if script.lower() in output.lower():
                 return True
 
         return False
 
-    except:
+    except Exception as e:
+        print("Error detectando procesos:", e)
         return False
 
 def cargar_datos():
