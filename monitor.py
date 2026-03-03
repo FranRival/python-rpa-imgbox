@@ -6,6 +6,11 @@ import requests
 from datetime import datetime
 from pathlib import Path
 
+SCRIPTS_MONITOREADOS = [
+    "Uploader.py",
+    "Procesador.py",
+    "Otro_script.py"
+]
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -21,13 +26,21 @@ DATA_FILE = BASE_DIR / "monitor_data.json"
 INTERVAL_MINUTES = 10
 
 
-def uploader_activo():
+def algun_script_activo():
     try:
-        output = subprocess.check_output("tasklist", shell=True).decode()
-        return "Uploader.py" in output
-    except:
+        output = subprocess.check_output(
+            'wmic process where "name=\'python.exe\'" get CommandLine',
+            shell=True
+        ).decode()
+
+        for script in SCRIPTS_MONITOREADOS:
+            if script in output:
+                return True
+
         return False
 
+    except:
+        return False
 
 def cargar_datos():
     if not os.path.exists(DATA_FILE):
@@ -81,7 +94,7 @@ def main():
             data = {"date": hoy, "minutes": 0}
 
     # Si uploader está activo → sumar minutos
-    if uploader_activo():
+    if algun_script_activo():
         data["minutes"] += INTERVAL_MINUTES
         print("Uploader activo. Minutos acumulados:", data["minutes"])
     else:
