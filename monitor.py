@@ -7,8 +7,8 @@ from datetime import datetime
 from pathlib import Path
 
 SCRIPTS_MONITOREADOS = [
-    "Uploader.py",
-    "Procesador.py",
+    "uploader.py",
+    "procesador.py",
     "Otro_script.py"
 ]
 
