@@ -135,3 +135,7 @@ if __name__ == "__main__":
     #nginx
 
     ##Agregamoslimites en limits.conf - soft nofile 65.. y hard nofile 65...
+
+    #cat /etc/nginx/nginx.conf | grep worker - da el numero total de workers - y cada worker abre conexiones imultaneas
+
+    #ss -s - cantidad de conexiones activas. X can be applied inmmediately. ahi es donde vemos si hay saturacion
