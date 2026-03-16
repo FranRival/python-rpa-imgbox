@@ -110,3 +110,28 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+    #problemas... cada 10 minutos se ejecuta. en total son 144 request al dia. Si algunas no se cierran, acumulan sockets.
+
+    #Conexiones HTTP quedan abiertas
+
+    #SSH deja de responder
+    #terminal lightsail fallando
+    #nginx sigue running
+    #necesita un reboot
+
+    #Este programa corre con Python, y Gunicorn crea problemas
+
+    #Cada request crea un Worker
+    #el worker no se libera
+    #Aculumacion de horas + dias hace que el servidor llegue al limite en silencio....
+
+    #Acumulacion de fallas hace que falle:
+
+    #Sockets
+    #SSH
+    #nginx
+
+    ##Agregamoslimites en limits.conf - soft nofile 65.. y hard nofile 65...
