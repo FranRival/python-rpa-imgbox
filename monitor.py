@@ -5,6 +5,7 @@ import json
 import requests
 from datetime import datetime
 from pathlib import Path
+import time
 
 SCRIPTS_MONITOREADOS = [
     "uploader.py",
@@ -65,17 +66,23 @@ def enviar_a_api(date, minutes):
         "Content-Type": "application/json"
     }
 
-    try:
-        response = requests.post(API_URL, json=payload, headers=headers, timeout=10)
+    for intento in range(3):
+        try:
+            response = requests.post(API_URL, json=payload, headers=headers, timeout=10)
 
-        print("Enviado:", payload)
-        print("Status:", response.status_code)
+            print("Enviado:", payload)
+            print("Status:", response.status_code)
 
-        return response.status_code == 200
+            if response.status_code == 200:
+                return True
 
-    except Exception as e:
-        print("Error enviando a API:", e)
-        return False
+        except Exception as e:
+            print(f"Error enviando a API (intento {intento+1}):", e)
+
+        # 🔴 esperar antes de intentar otra vez
+        time.sleep(30)
+
+    return False
 
 def main():
     hoy = str(datetime.now().date())
