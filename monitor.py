@@ -42,15 +42,39 @@ def algun_script_activo():
         return False
 
 def cargar_datos():
+    default_data = {
+        "date": str(datetime.now().date()),
+        "minutes": 0
+    }
+
     if not os.path.exists(DATA_FILE):
-        return {"date": str(datetime.now().date()), "minutes": 0}
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
+        return default_data
+
+    try:
+        with open(DATA_FILE, "r") as f:
+            content = f.read().strip()
+
+            if not content:
+                print("⚠️ JSON vacío, reiniciando...")
+                return default_data
+
+            return json.loads(content)
+
+    except json.JSONDecodeError:
+        print("⚠️ JSON corrupto, reiniciando...")
+        return default_data
+
+    except Exception as e:
+        print("Error leyendo JSON:", e)
+        return default_data
 
 
 def guardar_datos(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+    try:
+        with open(DATA_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        print("Error guardando JSON:", e)
 
 
 def enviar_a_api(date, minutes):
@@ -139,3 +163,7 @@ if __name__ == "__main__":
     #cat /etc/nginx/nginx.conf | grep worker - da el numero total de workers - y cada worker abre conexiones imultaneas
 
     #ss -s - cantidad de conexiones activas. X can be applied inmmediately. ahi es donde vemos si hay saturacion
+
+
+
+#---10-1-26 --- desde hace una semana no estaba enviando datos a la API - es un problema de lectura del JSON. Cargar_datos y guardar_datos tienen la vulnerabilidad. 
