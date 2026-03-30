@@ -129,7 +129,11 @@ def main():
     else:
         print("Uploader NO activo.")
 
+
+    
+    print("ANTES DE GUARDAR")
     guardar_datos(data)
+    print("DESPUES DE GUARDAR")
 
 
 if __name__ == "__main__":
