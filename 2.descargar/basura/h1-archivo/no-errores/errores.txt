@@ -1,0 +1,3 @@
+1. no se pueden descargar los archivos. de imagenes.
+2. tuve que regresar commits antes, a una version estable del codigo. donde fuencionada.
+3. no tengo idea de porque no funciona. es la misma estructura de URL. 
