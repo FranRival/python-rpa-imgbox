@@ -1,0 +1,2 @@
+detectar palabras clave como video.
+base de datos para evitar canibalizaciones
