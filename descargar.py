@@ -19,7 +19,7 @@ BASE_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# ✅ NUEVO: Ruta del TXT en el escritorio
+# Ruta del TXT en el escritorio (funciona con cualquier usuario de Windows)
 ESCRITORIO = os.path.join(os.path.expanduser("~"), "Desktop")
 TXT_VIDEOS = os.path.join(ESCRITORIO, "videos_sendvid.txt")
 
@@ -44,7 +44,7 @@ def descargar_imagen(url, destino, reintentos=2):
             with session.get(
                 url,
                 headers=headers,
-                timeout=(10, 20),
+                timeout=(10, 20),  # connect, read
                 stream=True
             ) as r:
                 r.raise_for_status()
@@ -54,7 +54,7 @@ def descargar_imagen(url, destino, reintentos=2):
                             break
                         f.write(chunk)
                 r.close()
-                return
+                return  # éxito
         except Exception as e:
             if intento == reintentos:
                 raise e
@@ -74,10 +74,21 @@ def normalizar_url(src):
         return src
     return None
 
-# ✅ NUEVO: Función para guardar URL de video en el TXT
+def es_dominio_video(url):
+    """Devuelve True si la URL pertenece a un dominio de video conocido."""
+    try:
+        dominio = urlparse(url).netloc.lower()
+        return any(dominio.endswith(v) for v in VIDEO_DOMINIOS)
+    except Exception:
+        return False
+
 def registrar_url_video(url, carpeta_origen):
-    with open(TXT_VIDEOS, "a", encoding="utf-8") as f:
-        f.write(f"{url}    # {carpeta_origen}\n")
+    """Escribe la URL de video en el TXT del escritorio (modo append)."""
+    try:
+        with open(TXT_VIDEOS, "a", encoding="utf-8") as f:
+            f.write(f"{url}    # {carpeta_origen}\n")
+    except Exception as e:
+        print(f"   ⚠️  No se pudo escribir en {TXT_VIDEOS} -> {e}")
 
 # =========================
 # PROCESAMIENTO RECURSIVO
@@ -85,8 +96,10 @@ def registrar_url_video(url, carpeta_origen):
 for root, dirs, files in os.walk(BASE_DIR):
     if "source.html" not in files:
         continue
+
     html_path = os.path.join(root, "source.html")
     print(f"\n📂 Procesando: {root}")
+
     try:
         with open(html_path, "r", encoding="utf-8", errors="ignore") as f:
             soup = BeautifulSoup(f.read(), "html.parser")
@@ -94,6 +107,9 @@ for root, dirs, files in os.walk(BASE_DIR):
         print(f"❌ Error leyendo source.html -> {e}")
         continue
 
+    # -------------------------
+    # 1. Recolectar imágenes
+    # -------------------------
     imagenes = set()
     for img in soup.find_all("img"):
         src = (
@@ -109,15 +125,36 @@ for root, dirs, files in os.walk(BASE_DIR):
             continue
         imagenes.add(url)
 
-    print(f"🖼️ Imágenes detectadas: {len(imagenes)}")
+    # -------------------------
+    # 2. Detectar iframes de video (sendvid / sendvideo)
+    # -------------------------
+    videos_encontrados = 0
+    for iframe in soup.find_all("iframe"):
+        src = iframe.get("src", "").strip()
+        if not src:
+            continue
+        url = normalizar_url(src)
+        if not url:
+            continue
+        if es_dominio_video(url):
+            registrar_url_video(url, root)
+            print(f"   🎬 iframe de video registrado: {url}")
+            videos_encontrados += 1
+
+    if videos_encontrados == 0:
+        print(f"   (sin iframes de video en esta carpeta)")
+
+    # -------------------------
+    # 3. Descargar imágenes
+    # -------------------------
+    print(f"🖼️  Imágenes detectadas: {len(imagenes)}")
 
     for i, img_url in enumerate(imagenes, 1):
-        # ✅ NUEVO: Detectar URLs de video antes de intentar descargar
-        dominio = urlparse(img_url).netloc.lower()
-        if any(dominio.endswith(v) for v in VIDEO_DOMINIOS):
+        # Por si acaso alguna imagen también apunta a un dominio de video, la omitimos
+        if es_dominio_video(img_url):
             registrar_url_video(img_url, root)
-            print(f"   🎬 Video detectado y registrado: {img_url}")
-            continue  # No intenta descargar como imagen
+            print(f"   🎬 URL de video en <img> registrada: {img_url}")
+            continue
 
         try:
             nombre = nombre_archivo_desde_url(img_url, i)
@@ -131,3 +168,4 @@ for root, dirs, files in os.walk(BASE_DIR):
             print(f"   ❌ Error {img_url} -> {e}")
 
 print("\n🏁 Proceso terminado.")
+print(f"📄 URLs de video guardadas en: {TXT_VIDEOS}")
