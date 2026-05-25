@@ -216,7 +216,7 @@ if __name__ == "__main__":
     import sys
     
     # ============================================================
-    # CONFIGURA AQUÍ LA RUTA DE TUS CARPETAS
+    # CONFIGURA AQUÍ LA RUTA DE TUS CARPETAS 
     # ============================================================
     RUTA_CARPETA_MADRE = r"C:\Users\dell\Downloads\descarga\links"
     ARCHIVO_SALIDA = "resultado.txt"
