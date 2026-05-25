@@ -133,18 +133,6 @@ def extract_nombre_from_comments(comments):
                         return comment_clean
     
     return None
-        
-        # Patrón 4: Solo si es MUY limpio - solo 1 o 2 palabras, solo letras y espacios
-        if 3 <= len(comment_clean) <= 35:
-            palabras = comment_clean.split()
-            # Solo 1 o 2 palabras, todas deben ser válidas (capitalizadas o todo minúsculas)
-            if len(palabras) <= 2:
-                if all(re.match(r"^[A-Za-záéíóúñÁÉÍÓÚÑ]+$", p) for p in palabras):
-                    # Verifica que no sea una palabra reservada
-                    if not any(p.lower() in palabras_ignorar for p in palabras):
-                        return comment_clean
-    
-    return None
 
 
 def procesar_carpetas(ruta_madre, ruta_output="resultado.txt"):
@@ -237,7 +225,7 @@ if __name__ == "__main__":
     # ============================================================
     # CONFIGURA AQUÍ LA RUTA DE TUS CARPETAS
     # ============================================================
-    RUTA_CARPETA_MADRE = r"C:\users\dell\downloads\carpeta-madre"
+    RUTA_CARPETA_MADRE = r"C:\Users\dell\Downloads\descarga\links"
     ARCHIVO_SALIDA = "resultado.txt"
     # ============================================================
     
