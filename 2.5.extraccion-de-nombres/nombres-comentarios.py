@@ -54,27 +54,31 @@ def extract_nombre_from_comments(comments):
     """
     
     patterns = [
-        r"su\s+nombres?\s+(?:es\s+)?([A-Za-záéíóúñÁÉÍÓÚÑ\s]+?)(?:\s*,|$)",
-        r"data\s*:?\s*([A-Za-záéíóúñÁÉÍÓÚÑ\s]+?)(?:\s*,|$)",
-        r"ella\s+es\s+([A-Za-záéíóúñÁÉÍÓÚÑ\s]+?)(?:\s*,|$)",
-        r"^([A-Za-záéíóúñÁÉÍÓÚÑ\s]+?)$"  # Solo nombre al inicio
+        r"su\s+nombres?\s+(?:es\s+)?([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+)?)(?:\s|,|$)",
+        r"data\s*:?\s*([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+)?)(?:\s|,|$)",
+        r"ella\s+es\s+([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+)?)(?:\s|,|$)",
+        r"nombre\s*:?\s*([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+)?)(?:\s|,|$)",
     ]
     
     for comment in comments:
         comment_clean = comment.replace("\n", " ").strip()
         
-        # Intenta cada patrón
-        for pattern in patterns[:-1]:  # Todos excepto el último
+        # Intenta cada patrón específico
+        for pattern in patterns:
             match = re.search(pattern, comment_clean, re.IGNORECASE)
             if match:
                 nombre = match.group(1).strip()
-                if nombre and len(nombre) > 1:  # Evita resultados muy cortos
-                    return nombre
+                # Valida que sea un nombre válido (máximo 2 palabras, solo letras)
+                if nombre and 2 < len(nombre) < 50:
+                    # Verifica que no contenga caracteres especiales
+                    if re.match(r"^[A-Za-záéíóúñÁÉÍÓÚÑ\s]+$", nombre):
+                        return nombre
         
         # Patrón simple: si el comentario es muy corto, podría ser solo un nombre
-        if len(comment_clean) < 50 and len(comment_clean) > 1:
-            # Verifica que contenga principalmente letras
-            if re.match(r"^[A-Za-záéíóúñÁÉÍÓÚÑ\s]+$", comment_clean):
+        if 5 < len(comment_clean) < 35:
+            # Verifica que contenga principalmente letras (máximo 2 palabras)
+            palabras = comment_clean.split()
+            if len(palabras) <= 2 and re.match(r"^[A-Za-záéíóúñÁÉÍÓÚÑ\s]+$", comment_clean):
                 return comment_clean
     
     return None
@@ -168,7 +172,7 @@ if __name__ == "__main__":
     # ============================================================
     # CONFIGURA AQUÍ LA RUTA DE TUS CARPETAS
     # ============================================================
-    RUTA_CARPETA_MADRE = r"C:\Users\dell\Downloads\descarga\links"
+    RUTA_CARPETA_MADRE = r"C:\users\dell\downloads\carpeta-madre"
     ARCHIVO_SALIDA = "resultado.txt"
     # ============================================================
     
@@ -176,7 +180,7 @@ if __name__ == "__main__":
     carpeta_madre = RUTA_CARPETA_MADRE
     archivo_salida = ARCHIVO_SALIDA
     
-    # Prioridad: 1) Argumento línea de comandos, 2) Variable RUTA_CARPETA_MADRE, 3) Input del usuario
+    # Prioridad: 1) Argumento línea de comandos, 2) Variables configuradas
     if len(sys.argv) > 1:
         carpeta_madre = sys.argv[1]
         if len(sys.argv) > 2:
