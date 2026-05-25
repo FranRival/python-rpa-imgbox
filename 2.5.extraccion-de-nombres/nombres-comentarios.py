@@ -6,23 +6,34 @@ import re
 from pathlib import Path
 from html.parser import HTMLParser
 
-class HTMLCommentExtractor(HTMLParser):
-    """Extrae comentarios HTML y el título/h1"""
+class HTMLExtractor(HTMLParser):
+    """Extrae título, h1 y contenido de la sección #comments"""
     
     def __init__(self):
         super().__init__()
-        self.comments = []
         self.title = None
         self.h1 = None
+        self.comments_content = ""
         self.in_title = False
         self.in_h1 = False
+        self.in_comments_section = False
         self.current_h1 = ""
+        self.depth_in_comments = 0
     
     def handle_starttag(self, tag, attrs):
+        attrs_dict = dict(attrs)
+        
         if tag == "title":
             self.in_title = True
         elif tag == "h1":
             self.in_h1 = True
+        
+        # Buscar sección #comments (puede ser div, section, etc. con id="comments")
+        if attrs_dict.get("id") == "comments":
+            self.in_comments_section = True
+            self.depth_in_comments = 1
+        elif self.in_comments_section:
+            self.depth_in_comments += 1
     
     def handle_endtag(self, tag):
         if tag == "title":
@@ -32,15 +43,21 @@ class HTMLCommentExtractor(HTMLParser):
             if self.current_h1:
                 self.h1 = self.current_h1.strip()
                 self.current_h1 = ""
+        
+        # Controlar cuándo termina la sección de comentarios
+        if self.in_comments_section:
+            self.depth_in_comments -= 1
+            if self.depth_in_comments == 0:
+                self.in_comments_section = False
     
     def handle_data(self, data):
         if self.in_title and not self.title:
             self.title = data.strip()
         elif self.in_h1:
             self.current_h1 += data
-    
-    def handle_comment(self, data):
-        self.comments.append(data.strip())
+        elif self.in_comments_section:
+            # Agregar el texto de la sección de comentarios
+            self.comments_content += " " + data.strip()
 
 
 def extract_nombre_from_comments(comments):
@@ -176,14 +193,16 @@ def procesar_carpetas(ruta_madre, ruta_output="resultado.txt"):
                 contenido_html = f.read()
             
             # Extrae información
-            parser = HTMLCommentExtractor()
+            parser = HTMLExtractor()
             parser.feed(contenido_html)
             
             # Obtén el título (prefiere title, luego h1)
             titulo = parser.title or parser.h1 or "Sin título"
             
-            # Extrae el nombre de los comentarios
-            nombre = extract_nombre_from_comments(parser.comments)
+            # Extrae el nombre de la sección #comments
+            # Convierte el contenido en una lista de "comentarios" para usar la misma función
+            comments_list = [parser.comments_content] if parser.comments_content else []
+            nombre = extract_nombre_from_comments(comments_list)
             
             if nombre:
                 resultado = f"{titulo} - {nombre}"
@@ -218,7 +237,7 @@ if __name__ == "__main__":
     # ============================================================
     # CONFIGURA AQUÍ LA RUTA DE TUS CARPETAS
     # ============================================================
-    RUTA_CARPETA_MADRE = r"C:\Users\dell\Downloads\descarga\links"
+    RUTA_CARPETA_MADRE = r"C:\users\dell\downloads\carpeta-madre"
     ARCHIVO_SALIDA = "resultado.txt"
     # ============================================================
     
