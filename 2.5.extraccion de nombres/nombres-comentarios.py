@@ -165,13 +165,21 @@ def procesar_carpetas(ruta_madre, ruta_output="resultado.txt"):
 if __name__ == "__main__":
     import sys
     
-    # Usar argumento de línea de comandos o pedir input
+    # ============================================================
+    # CONFIGURA AQUÍ LA RUTA DE TUS CARPETAS
+    # ============================================================
+    RUTA_CARPETA_MADRE = r"C:\users\dell\downloads\carpeta-madre"
+    ARCHIVO_SALIDA = "resultado.txt"
+    # ============================================================
+    
+    # Prioridad: 1) Argumento línea de comandos, 2) Variable RUTA_CARPETA_MADRE, 3) Input del usuario
     if len(sys.argv) > 1:
         carpeta_madre = sys.argv[1]
         if len(sys.argv) > 2:
             archivo_salida = sys.argv[2]
-        else:
-            archivo_salida = "resultado.txt"
+    elif RUTA_CARPETA_MADRE and RUTA_CARPETA_MADRE != r"C:\Ruta\A\Tus\Carpetas":
+        carpeta_madre = RUTA_CARPETA_MADRE
+        print(f"Usando ruta configurada: {carpeta_madre}")
     else:
         carpeta_madre = input("Ingresa la ruta a la carpeta madre: ").strip()
         archivo_salida = input("Nombre del archivo de salida (predeterminado: resultado.txt): ").strip() or "resultado.txt"
