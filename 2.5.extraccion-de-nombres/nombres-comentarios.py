@@ -50,20 +50,23 @@ class HTMLExtractor(HTMLParser):
 
 def contar_comentarios(contenido_html):
     """
-    Cuenta los comentarios buscando el contador de comentarios en la página
+    Cuenta los comentarios usando el contador oficial de la página.
+    El <span class="count"> incluye TODOS los comentarios (visibles + ocultos)
     """
     
-    # Intenta encontrar el contador en el HTML (ej: "<span class="count">6</span>")
+    # Buscar el contador de comentarios más confiable
+    # Patrón: <span class="count">6</span> comentarios
     match = re.search(r'<span\s+class="count">(\d+)</span>', contenido_html)
+    
     if match:
         try:
             return int(match.group(1))
         except:
-            pass
+            return 0
     
-    # Si no encuentra el contador, cuenta los divs con class="comment"
-    comment_divs = re.findall(r'<div\s+class="comment', contenido_html)
-    return len(comment_divs)
+    # Fallback: si no encuentra el contador, retorna 0
+    # (mejor ser conservador que contar mal)
+    return 0
 
 
 def procesar_carpetas(ruta_madre, ruta_output="resultado.txt"):
@@ -165,7 +168,7 @@ if __name__ == "__main__":
     # ============================================================
     # CONFIGURA AQUÍ LA RUTA DE TUS CARPETAS
     # ============================================================
-    RUTA_CARPETA_MADRE = r"C:\Users\dell\Downloads\descarga\links"
+    RUTA_CARPETA_MADRE = r"C:\users\dell\downloads\carpeta-madre"
     ARCHIVO_SALIDA = "resultado.txt"
     # ============================================================
     
