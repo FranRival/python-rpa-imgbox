@@ -8,19 +8,18 @@ from html.parser import HTMLParser
 
 
 class HTMLExtractor(HTMLParser):
-    """Extrae título, h1 y contenido de la sección #comments"""
-
+    """Extrae URL, título y cuenta comentarios"""
+    
     def __init__(self):
         super().__init__()
+        self.url = None
         self.title = None
         self.h1 = None
-        self.comments_content = ""
+        self.comment_count = 0
         self.in_title = False
         self.in_h1 = False
-        self.in_comments_section = False
         self.current_h1 = ""
-        self.depth_in_comments = 0
-
+    
     def handle_starttag(self, tag, attrs):
         attrs_dict = dict(attrs)
 
@@ -28,14 +27,12 @@ class HTMLExtractor(HTMLParser):
             self.in_title = True
         elif tag == "h1":
             self.in_h1 = True
-
-        # Buscar sección #comments
-        if attrs_dict.get("id") == "comments":
-            self.in_comments_section = True
-            self.depth_in_comments = 1
-        elif self.in_comments_section:
-            self.depth_in_comments += 1
-
+        
+        # Extraer URL del meta tag og:url
+        if tag == "meta":
+            if attrs_dict.get("property") == "og:url":
+                self.url = attrs_dict.get("content")
+    
     def handle_endtag(self, tag):
         if tag == "title":
             self.in_title = False
@@ -46,14 +43,7 @@ class HTMLExtractor(HTMLParser):
             if self.current_h1:
                 self.h1 = self.current_h1.strip()
                 self.current_h1 = ""
-
-        # Controlar cuándo termina la sección comments
-        if self.in_comments_section:
-            self.depth_in_comments -= 1
-
-            if self.depth_in_comments == 0:
-                self.in_comments_section = False
-
+    
     def handle_data(self, data):
         if self.in_title and not self.title:
             self.title = data.strip()
@@ -61,138 +51,23 @@ class HTMLExtractor(HTMLParser):
         elif self.in_h1:
             self.current_h1 += data
 
-        elif self.in_comments_section:
-            self.comments_content += " " + data.strip()
 
-
-def extract_nombre_from_comments(comments):
+def contar_comentarios(contenido_html):
     """
-    Extrae SOLO nombres reales de los comentarios.
+    Cuenta los comentarios buscando el contador de comentarios en la página
     """
-
-    palabras_ignorar = {
-        'sitio', 'web', 'jquery', 'javascript', 'html', 'css',
-        'php', 'python', 'función', 'script', 'archivo',
-        'página', 'blog', 'post', 'artículo', 'contenido',
-        'código', 'tema', 'plugin', 'framework', 'librería',
-        'api', 'base', 'datos', 'servidor', 'cliente',
-        'desarrollo', 'diseño', 'responsive', 'mobile',
-        'desktop', 'version', 'actualización', 'bug',
-        'fix', 'error', 'solución', 'tutorial', 'guía',
-        'ejemplo', 'demo', 'template', 'herramienta',
-        'tool', 'widget', 'componente', 'url', 'link',
-        'href', 'src', 'class', 'id', 'div', 'span',
-        'captcha', 'meta'
-    }
-
-    patrones = [
-        (
-            r"se\s+llama\s+([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+)?)",
-            "se llama"
-        ),
-        (
-            r"su\s+nombre\s+es\s+([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+)?)",
-            "su nombre es"
-        ),
-        (
-            r"ella\s+es\s+([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+)?)",
-            "ella es"
-        ),
-        (
-            r"este\s+es\s+su\s+instagram\s+([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+)?)",
-            "instagram"
-        ),
-        (
-            r"está\s+en\s+instagram\s+([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+)?)",
-            "instagram"
-        ),
-        (
-            r"instagram\s+([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+)?)",
-            "instagram"
-        ),
-        (
-            r"este\s+es\s+su\s+facebook\s+([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+)?)",
-            "facebook"
-        ),
-        (
-            r"cafecito\s+(?:es\s+)?([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+)?)",
-            "cafecito"
-        ),
-        (
-            r"su\s+nombres?\s+(?:es\s+)?([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+)?)",
-            "nombre"
-        ),
-        (
-            r"data\s*:?\s*([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+)?)",
-            "data"
-        ),
-    ]
-
-    for comment in comments:
-
-        if not comment or not comment.strip():
-            continue
-
-        comment_clean = comment.replace("\n", " ").strip()
-
-        sentences = re.split(r'[.!?;,]', comment_clean)
-
-        for sentence in sentences:
-
-            sentence = sentence.strip()
-
-            if len(sentence) < 5 or len(sentence) > 200:
-                continue
-
-            # Ignorar texto técnico
-            if any(
-                palabra in sentence.lower()
-                for palabra in palabras_ignorar
-            ):
-                continue
-
-            # Buscar patrones
-            for patron, nombre_patron in patrones:
-
-                match = re.search(
-                    patron,
-                    sentence,
-                    re.IGNORECASE
-                )
-
-                if match:
-
-                    nombre = match.group(1).strip()
-
-                    if 3 <= len(nombre) <= 40:
-
-                        if nombre.count(' ') <= 2:
-
-                            if re.match(
-                                r"^[A-Za-záéíóúñÁÉÍÓÚÑ\s]+$",
-                                nombre
-                            ):
-                                return nombre
-
-        # Fallback
-        if 3 <= len(comment_clean) <= 35:
-
-            palabras = comment_clean.split()
-
-            if len(palabras) <= 2:
-
-                if all(
-                    re.match(r"^[A-Za-záéíóúñÁÉÍÓÚÑ]+$", p)
-                    for p in palabras
-                ):
-
-                    if not any(
-                        p.lower() in palabras_ignorar
-                        for p in palabras
-                    ):
-                        return comment_clean
-
-    return None
+    
+    # Intenta encontrar el contador en el HTML (ej: "<span class="count">6</span>")
+    match = re.search(r'<span\s+class="count">(\d+)</span>', contenido_html)
+    if match:
+        try:
+            return int(match.group(1))
+        except:
+            pass
+    
+    # Si no encuentra el contador, cuenta los divs con class="comment"
+    comment_divs = re.findall(r'<div\s+class="comment', contenido_html)
+    return len(comment_divs)
 
 
 def procesar_carpetas(
@@ -200,14 +75,20 @@ def procesar_carpetas(
     ruta_output="resultado.txt"
 ):
     """
-    Procesa todas las carpetas y extrae la información.
+    Procesa todas las carpetas y extrae:
+    - URL del post
+    - Título
+    - Cantidad de comentarios
+    
+    Solo escribe en el archivo si hay comentarios
     """
 
     resultados = []
 
     contador = {
         "procesados": 0,
-        "exitosos": 0,
+        "con_comentarios": 0,
+        "sin_comentarios": 0,
         "errores": 0
     }
 
@@ -246,41 +127,22 @@ def procesar_carpetas(
 
             parser = HTMLExtractor()
             parser.feed(contenido_html)
-
-            titulo = (
-                parser.title
-                or parser.h1
-                or "Sin título"
-            )
-
-            comments_list = (
-                [parser.comments_content]
-                if parser.comments_content
-                else []
-            )
-
-            nombre = extract_nombre_from_comments(
-                comments_list
-            )
-
-            if nombre:
-
-                resultado = f"{titulo} - {nombre}"
-
+            
+            # Obtén datos
+            url = parser.url or "Sin URL"
+            titulo = parser.title or parser.h1 or "Sin título"
+            num_comentarios = contar_comentarios(contenido_html)
+            
+            # IMPORTANTE: Solo escribe si hay comentarios
+            if num_comentarios > 0:
+                resultado = f"{url} - {titulo} - {num_comentarios}"
                 resultados.append(resultado)
-
-                contador["exitosos"] += 1
-
-                print(
-                    f"✓ {subcarpeta.name}: {resultado}"
-                )
-
+                contador["con_comentarios"] += 1
+                print(f"✓ {subcarpeta.name}: {num_comentarios} comentarios")
             else:
-                print(
-                    f"⚠ {subcarpeta.name}: "
-                    f"No se encontró nombre"
-                )
-
+                contador["sin_comentarios"] += 1
+                print(f"⊘ {subcarpeta.name}: Sin comentarios (ignorado)")
+        
         except Exception as e:
 
             contador["errores"] += 1
@@ -303,13 +165,20 @@ def procesar_carpetas(
         print("-" * 80)
 
         print(f"\n✓ Archivo creado: {ruta_output}")
-        print(f"Procesados: {contador['procesados']}")
-        print(f"Exitosos: {contador['exitosos']}")
-        print(f"Errores: {contador['errores']}")
-        print(f"Total de líneas: {len(resultados)}")
-
+        print(f"\nEstadísticas:")
+        print(f"  Procesados: {contador['procesados']}")
+        print(f"  Con comentarios: {contador['con_comentarios']}")
+        print(f"  Sin comentarios: {contador['sin_comentarios']}")
+        print(f"  Errores: {contador['errores']}")
+        print(f"  Total líneas en resultado: {len(resultados)}")
     else:
-        print("\n⚠ No se encontraron resultados")
+        print("-" * 80)
+        print(f"\n⚠ No se encontraron posts con comentarios")
+        print(f"\nEstadísticas:")
+        print(f"  Procesados: {contador['procesados']}")
+        print(f"  Con comentarios: {contador['con_comentarios']}")
+        print(f"  Sin comentarios: {contador['sin_comentarios']}")
+        print(f"  Errores: {contador['errores']}")
 
 
 if __name__ == "__main__":
