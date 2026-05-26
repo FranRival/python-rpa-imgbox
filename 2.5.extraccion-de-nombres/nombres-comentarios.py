@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-
 import os
 import re
 from pathlib import Path
 from html.parser import HTMLParser
-
 
 class HTMLExtractor(HTMLParser):
     """Extrae URL, título y cuenta comentarios"""
@@ -23,7 +21,7 @@ class HTMLExtractor(HTMLParser):
     
     def handle_starttag(self, tag, attrs):
         attrs_dict = dict(attrs)
-
+        
         if tag == "title":
             self.in_title = True
         elif tag == "h1":
@@ -37,10 +35,8 @@ class HTMLExtractor(HTMLParser):
     def handle_endtag(self, tag):
         if tag == "title":
             self.in_title = False
-
         elif tag == "h1":
             self.in_h1 = False
-
             if self.current_h1:
                 self.h1 = self.current_h1.strip()
                 self.current_h1 = ""
@@ -48,7 +44,6 @@ class HTMLExtractor(HTMLParser):
     def handle_data(self, data):
         if self.in_title and not self.title:
             self.title = data.strip()
-
         elif self.in_h1:
             self.current_h1 += data
 
@@ -71,10 +66,7 @@ def contar_comentarios(contenido_html):
     return len(comment_divs)
 
 
-def procesar_carpetas(
-    ruta_madre,
-    ruta_output="resultado.txt"
-):
+def procesar_carpetas(ruta_madre, ruta_output="resultado.txt"):
     """
     Procesa todas las carpetas y extrae:
     - URL del post
@@ -83,49 +75,45 @@ def procesar_carpetas(
     
     Solo escribe en el archivo si hay comentarios
     """
-
+    
     resultados = []
-
     contador = {
         "procesados": 0,
         "con_comentarios": 0,
         "sin_comentarios": 0,
         "errores": 0
     }
-
+    
     ruta_madre = Path(ruta_madre)
-
+    
     if not ruta_madre.exists():
         print(f"Error: La ruta {ruta_madre} no existe")
         return
-
+    
     print(f"Buscando carpetas en: {ruta_madre}")
     print("-" * 80)
-
-    # Recorre subcarpetas
+    
+    # Recorre todas las subcarpetas
     for subcarpeta in sorted(ruta_madre.iterdir()):
-
         if not subcarpeta.is_dir():
             continue
-
+        
+        # Busca archivos HTML en la subcarpeta
         archivos_html = list(subcarpeta.glob("*.html"))
-
+        
         if not archivos_html:
             continue
-
+        
+        # Toma el primer HTML encontrado
         archivo_html = archivos_html[0]
-
         contador["procesados"] += 1
-
+        
         try:
-            with open(
-                archivo_html,
-                'r',
-                encoding='utf-8'
-            ) as f:
-
+            # Lee el archivo HTML
+            with open(archivo_html, 'r', encoding='utf-8') as f:
                 contenido_html = f.read()
-
+            
+            # Extrae información
             parser = HTMLExtractor()
             parser.feed(contenido_html)
             
@@ -145,26 +133,15 @@ def procesar_carpetas(
                 print(f"⊘ {subcarpeta.name}: Sin comentarios (ignorado)")
         
         except Exception as e:
-
             contador["errores"] += 1
-
-            print(
-                f"✗ {subcarpeta.name}: Error - {str(e)}"
-            )
-
-    # Guardar salida
+            print(f"✗ {subcarpeta.name}: Error - {str(e)}")
+    
+    # Escribe el archivo de salida
     if resultados:
-
-        with open(
-            ruta_output,
-            'w',
-            encoding='utf-8'
-        ) as f:
-
+        with open(ruta_output, 'w', encoding='utf-8') as f:
             f.write("\n".join(resultados))
-
+        
         print("-" * 80)
-
         print(f"\n✓ Archivo creado: {ruta_output}")
         print(f"\nEstadísticas:")
         print(f"  Procesados: {contador['procesados']}")
@@ -183,47 +160,26 @@ def procesar_carpetas(
 
 
 if __name__ == "__main__":
-
     import sys
-
+    
     # ============================================================
-    # CONFIGURACIÓN
+    # CONFIGURA AQUÍ LA RUTA DE TUS CARPETAS
     # ============================================================
-
-    RUTA_CARPETA_MADRE = (
-        r"C:\Users\dell\Downloads\descarga\links"
-    )
-
+    RUTA_CARPETA_MADRE = r"C:\Users\dell\Downloads\descarga\links"
     ARCHIVO_SALIDA = "resultado.txt"
-
     # ============================================================
-
+    
+    # Inicializar variables con valores predeterminados
     carpeta_madre = RUTA_CARPETA_MADRE
     archivo_salida = ARCHIVO_SALIDA
-
-    # Prioridad:
-    # 1) Argumentos CLI
-    # 2) Variables configuradas
-
+    
+    # Prioridad: 1) Argumento línea de comandos, 2) Variables configuradas
     if len(sys.argv) > 1:
-
         carpeta_madre = sys.argv[1]
-
         if len(sys.argv) > 2:
             archivo_salida = sys.argv[2]
-
-        print(
-            f"Usando ruta desde línea de comandos: "
-            f"{carpeta_madre}"
-        )
-
+        print(f"Usando ruta desde línea de comandos: {carpeta_madre}")
     else:
-        print(
-            f"Usando ruta configurada: "
-            f"{carpeta_madre}"
-        )
-
-    procesar_carpetas(
-        carpeta_madre,
-        archivo_salida
-    )
+        print(f"Usando ruta configurada: {carpeta_madre}")
+    
+    procesar_carpetas(carpeta_madre, archivo_salida)
