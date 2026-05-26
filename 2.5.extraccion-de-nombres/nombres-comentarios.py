@@ -62,21 +62,16 @@ class HTMLExtractor(HTMLParser):
 
 def extract_nombre_from_comments(comments):
     """
-    Extrae SOLO nombres reales de los comentarios HTML.
-    Busca estos patrones exactos:
+    Extrae SOLO nombres reales de los comentarios.
+    Busca estos patrones exactos en cada línea/oración:
     - "se llama [Nombre]"
     - "está en Instagram [Nombre]"
-    - "este es su Instagram [Nombre]"
-    - "Instagram [Nombre]"
-    - "cafecito [Nombre]"
-    - "este es su Facebook [Nombre]"
     - "Su nombre es [Nombre]"
     - "Ella es [Nombre]"
-    - "su nombres es [Nombre]"
-    - "data [Nombre]"
+    - etc.
     """
     
-    # Palabras a ignorar completamente (técnicas, basura, etc)
+    # Palabras a ignorar (técnicas, basura, etc)
     palabras_ignorar = {
         'sitio', 'web', 'jquery', 'javascript', 'html', 'css', 'php', 'python',
         'función', 'script', 'archivo', 'página', 'blog', 'post', 'artículo',
@@ -85,7 +80,7 @@ def extract_nombre_from_comments(comments):
         'diseño', 'responsive', 'mobile', 'desktop', 'version', 'actualización',
         'bug', 'fix', 'error', 'solución', 'tutorial', 'guía', 'ejemplo',
         'demo', 'template', 'herramienta', 'tool', 'widget', 'componente',
-        'url', 'link', 'href', 'src', 'class', 'id', 'div', 'span'
+        'url', 'link', 'href', 'src', 'class', 'id', 'div', 'span', 'captcha', 'meta'
     }
     
     # Lista de patrones en orden de prioridad
@@ -103,32 +98,54 @@ def extract_nombre_from_comments(comments):
     ]
     
     for comment in comments:
+        if not comment or not comment.strip():
+            continue
+        
+        # Dividir en oraciones/líneas
         comment_clean = comment.replace("\n", " ").strip()
         
-        # Ignorar comentarios muy largos
-        if len(comment_clean) > 100:
-            continue
+        # Procesar oraciones separadas por puntos, comas, etc.
+        sentences = re.split(r'[.!?;,]', comment_clean)
         
-        # Ignorar si contiene palabras técnicas
-        if any(palabra in comment_clean.lower() for palabra in palabras_ignorar):
-            continue
+        for sentence in sentences:
+            sentence = sentence.strip()
+            
+            # Saltar si es muy corto o muy largo
+            if len(sentence) < 5 or len(sentence) > 200:
+                continue
+            
+            # Ignorar si contiene palabras técnicas
+            if any(palabra in sentence.lower() for palabra in palabras_ignorar):
+                continue
+            
+            # Intentar cada patrón
+            for patron, nombre_patron in patrones:
+                match = re.search(patron, sentence, re.IGNORECASE)
+                if match:
+                    nombre = match.group(1).strip()
+                    # Validar que sea un nombre válido
+                    if 3 <= len(nombre) <= 40 and nombre.count(' ') <= 2:
+                        # Verificar que sea solo letras (sin números ni caracteres raros)
+                        if re.match(r"^[A-Za-záéíóúñÁÉÍÓÚÑ\s]+$", nombre):
+                            return nombre
         
-        # Intentar cada patrón
-        for patron, nombre_patron in patrones:
-            match = re.search(patron, comment_clean, re.IGNORECASE)
-            if match:
-                nombre = match.group(1).strip()
-                # Validar que sea un nombre válido
-                if 3 <= len(nombre) <= 40 and nombre.count(' ') <= 2:
-                    # Verificar que sea solo letras (sin números ni caracteres raros)
-                    if re.match(r"^[A-Za-záéíóúñÁÉÍÓÚÑ\s]+$", nombre):
-                        return nombre
-        
-        # Patrón fallback: Si es muy corto y limpio, podría ser solo un nombre
+        # Patrón fallback: Si el comentario completo es muy limpio
         if 3 <= len(comment_clean) <= 35:
             palabras = comment_clean.split()
             if len(palabras) <= 2:
                 if all(re.match(r"^[A-Za-záéíóúñÁÉÍÓÚÑ]+$", p) for p in palabras):
+                    if not any(p.lower() in palabras_ignorar for p in palabras):
+                        return comment_clean
+    
+    return None
+        
+        # Patrón 4: Solo si es MUY limpio - solo 1 o 2 palabras, solo letras y espacios
+        if 3 <= len(comment_clean) <= 35:
+            palabras = comment_clean.split()
+            # Solo 1 o 2 palabras, todas deben ser válidas (capitalizadas o todo minúsculas)
+            if len(palabras) <= 2:
+                if all(re.match(r"^[A-Za-záéíóúñÁÉÍÓÚÑ]+$", p) for p in palabras):
+                    # Verifica que no sea una palabra reservada
                     if not any(p.lower() in palabras_ignorar for p in palabras):
                         return comment_clean
     
@@ -225,7 +242,7 @@ if __name__ == "__main__":
     # ============================================================
     # CONFIGURA AQUÍ LA RUTA DE TUS CARPETAS
     # ============================================================
-    RUTA_CARPETA_MADRE = r"C:\Users\dell\Downloads\descarga\links"
+    RUTA_CARPETA_MADRE = r"C:\users\dell\downloads\carpeta-madre"
     ARCHIVO_SALIDA = "resultado.txt"
     # ============================================================
     
