@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 # =========================
 # CONFIGURACIÓN
 # =========================
-BASE_DIR = r"C:\Users\dell\Downloads\marzo\aaa"
+BASE_DIR = r"C:\Users\dell\Downloads\descarga"
 DELAY = 0.4
 BASE_HEADERS = {
     "User-Agent": (
