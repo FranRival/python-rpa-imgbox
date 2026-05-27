@@ -168,7 +168,7 @@ if __name__ == "__main__":
     # ============================================================
     # CONFIGURA AQUÍ LA RUTA DE TUS CARPETAS
     # ============================================================
-    RUTA_CARPETA_MADRE = r"C:\Users\dell\Downloads\descarga\links"
+    RUTA_CARPETA_MADRE = r"C:\Users\dell\Downloads\descarga\links18-nombre"
     ARCHIVO_SALIDA = "resultado.txt"
     # ============================================================
     
