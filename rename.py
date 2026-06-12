@@ -2,9 +2,9 @@ import os
 import sys
 
 # ── Configuración ──────────────────────────────────────────────────
-DIRECTORIO   = r"C:\Users\dell\Downloads\descarga\links13\links13"        # Carpeta donde están las subcarpetas a renombrar
-NOMBRE_BASE  = "name"     # Prefijo fijo
-NUMERO_INICIO = 1023       # Número inicial
+DIRECTORIO   = r"C:\Users\dell\Desktop\listo\links124-name"        # Carpeta donde están las subcarpetas a renombrar
+NOMBRE_BASE  = "Latin whore"     # Prefijo fijo
+NUMERO_INICIO = 101       # Número inicial
 INCREMENTO   = 1          # Cuánto sube cada vez
 # ───────────────────────────────────────────────────────────────────
 
