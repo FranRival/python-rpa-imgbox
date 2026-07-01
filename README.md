@@ -2,7 +2,7 @@
 
 ### ¿Qué hace este script?
 
-Este script realiza web scraping sobre el buscador de Poringa comenzando desde:
+Este script realiza web scraping sobre el buscador de Index submit 3 comenzando desde:
 
 https://www.----.net/buscar/?q=%4---57
 
