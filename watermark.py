@@ -9,7 +9,7 @@ from PIL import Image, ImageEnhance
 #   CONFIGURACION — modifica solo esta seccion
 # ============================================================
 
-CARPETA_FUENTE   = r"C:\Users\dell\Desktop\listo\links127"
+CARPETA_FUENTE   = r"C:\Users\dell\Downloads\descarga\links40\[b"
 CARPETA_SALIDA   = r"C:\Users\dell\Downloads\procesadas"
 MARCA_DE_AGUA    = r"C:\Users\dell\Downloads\logo-con-fondo.png"
 

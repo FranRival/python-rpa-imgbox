@@ -6,7 +6,7 @@ from PIL import Image
 # =========================
 
 # Carpeta origen
-CARPETA_ORIGEN = r"C:\Users\dell\Downloads\marca"
+CARPETA_ORIGEN = r"C:\Users\dell\Downloads\descarga\links8\Marcas"
 
 # Carpeta destino (Descargas)
 CARPETA_DESTINO = r"C:\Users\dell\Downloads\lmi_recortadas"
