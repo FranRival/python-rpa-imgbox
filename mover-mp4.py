@@ -2,7 +2,7 @@ import os
 import shutil
 
 # Ruta de la carpeta madre
-carpeta_madre = r"C:\Users\dell\Downloads\ps\mother"
+carpeta_madre = r"C:\Users\dell\Downloads\ps\1"
 
 for carpeta_actual, _, archivos in os.walk(carpeta_madre):
     # Evita procesar la carpeta madre

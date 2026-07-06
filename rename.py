@@ -2,8 +2,8 @@ import os
 import sys
 
 # ── Configuración ──────────────────────────────────────────────────
-DIRECTORIO   = r"C:\Users\dell\Downloads\descarga\links40\[b"        # Carpeta donde están las subcarpetas a renombrar
-NOMBRE_BASE  = "Another Latin Whore"     # Prefijo fijo
+DIRECTORIO   = r"C:\Users\dell\minion-project2\minion-project2\c"        # Carpeta donde están las subcarpetas a renombrar
+NOMBRE_BASE  = "Ups-"     # Prefijo fijo
 NUMERO_INICIO = 303       # Número inicial
 INCREMENTO   = 1          # Cuánto sube cada vez
 # ───────────────────────────────────────────────────────────────────
