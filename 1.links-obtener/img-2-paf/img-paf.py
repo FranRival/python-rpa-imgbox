@@ -9,7 +9,7 @@ import csv
 # =====================================================
 # CONFIGURACIÓN
 # =====================================================
-URL = "twik"
+URL = "https://www.--"
 ARCHIVO_SALIDA_HTML = "sitio_completo.html"
 CARPETA_IMAGENES = "imagenes_full"
 ARCHIVO_REPORTE = "reporte_descargas.csv"
@@ -164,7 +164,7 @@ def procesar_sitio():
     os.makedirs(CARPETA_IMAGENES, exist_ok=True)
 
     visitadas_galeria = set()
-    detalles_procesados = set()
+    ids_ya_descargados = set()
     reporte = []  # filas para el CSV
 
     url = URL
@@ -192,9 +192,9 @@ def procesar_sitio():
             print(f"  Fotos encontradas en esta galería: {len(paginas_detalle)}")
 
             for id_foto, url_detalle in paginas_detalle:
-                if url_detalle in detalles_procesados:
+                if id_foto in ids_ya_descargados:
                     continue
-                detalles_procesados.add(url_detalle)
+                ids_ya_descargados.add(id_foto)
 
                 # --- Paso 2: visitar detalle y extraer URL full ---
                 html_detalle = obtener_html(url_detalle, referer=url)
@@ -243,7 +243,7 @@ def procesar_sitio():
     print("\n" + "=" * 55)
     print("Proceso terminado.")
     print(f"Galerías visitadas: {len(visitadas_galeria)}")
-    print(f"Páginas de detalle procesadas: {len(detalles_procesados)}")
+    print(f"Fotos únicas procesadas: {len(ids_ya_descargados)}")
     print(f"Imágenes descargadas: {sum(1 for r in reporte if r[3] == 'OK')}")
     print(f"Errores: {sum(1 for r in reporte if r[3] == 'ERROR')}")
     print(f"No encontradas: {sum(1 for r in reporte if r[3] == 'NO_ENCONTRADA')}")
