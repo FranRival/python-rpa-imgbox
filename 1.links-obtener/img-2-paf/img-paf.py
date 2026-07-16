@@ -1,8 +1,14 @@
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
-import argparse
+from urllib.parse import urljoin
 import time
+
+# =====================================================
+# CONFIGURACIÓN
+# =====================================================
+
+URL = "https://----"
+ARCHIVO_SALIDA = "sitio_completo.html"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
@@ -11,20 +17,19 @@ HEADERS = {
 
 def obtener_html(url):
     try:
-        r = requests.get(url, headers=HEADERS, timeout=20)
-        r.raise_for_status()
-        return r.text
+        respuesta = requests.get(url, headers=HEADERS, timeout=20)
+        respuesta.raise_for_status()
+        return respuesta.text
     except Exception as e:
-        print(f"Error descargando {url}: {e}")
+        print(f"Error descargando {url}")
+        print(e)
         return None
 
 
 def encontrar_siguiente(soup, url_actual):
-    """
-    Busca la siguiente página mediante diferentes estrategias.
-    """
+    """Busca la siguiente página."""
 
-    # 1. rel="next"
+    # rel="next"
     link = soup.find("link", rel="next")
     if link and link.get("href"):
         return urljoin(url_actual, link["href"])
@@ -33,32 +38,31 @@ def encontrar_siguiente(soup, url_actual):
     if a and a.get("href"):
         return urljoin(url_actual, a["href"])
 
-    # 2. Buscar enlaces que contengan /page/
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-
+    # /page/
+    for enlace in soup.find_all("a", href=True):
+        href = enlace["href"]
         if "/page/" in href:
             return urljoin(url_actual, href)
 
-    # 3. Buscar ?page=
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-
+    # ?page=
+    for enlace in soup.find_all("a", href=True):
+        href = enlace["href"]
         if "page=" in href:
             return urljoin(url_actual, href)
 
     return None
 
 
-def descargar_paginacion(url_inicial, archivo_salida):
-    visitadas = set()
-    url = url_inicial
+def descargar_paginacion():
 
-    with open(archivo_salida, "w", encoding="utf-8") as f:
+    visitadas = set()
+    url = URL
+
+    with open(ARCHIVO_SALIDA, "w", encoding="utf-8") as archivo:
 
         while url and url not in visitadas:
 
-            print("Descargando:", url)
+            print(f"Descargando: {url}")
 
             visitadas.add(url)
 
@@ -67,11 +71,13 @@ def descargar_paginacion(url_inicial, archivo_salida):
             if html is None:
                 break
 
-            f.write("=" * 80 + "\n")
-            f.write(f"URL: {url}\n")
-            f.write("=" * 80 + "\n\n")
-            f.write(html)
-            f.write("\n\n\n")
+            archivo.write("\n")
+            archivo.write("<!-- ====================================================== -->\n")
+            archivo.write(f"<!-- URL: {url} -->\n")
+            archivo.write("<!-- ====================================================== -->\n\n")
+
+            archivo.write(html)
+            archivo.write("\n\n")
 
             soup = BeautifulSoup(html, "html.parser")
 
@@ -84,21 +90,9 @@ def descargar_paginacion(url_inicial, archivo_salida):
 
             time.sleep(1)
 
-    print(f"\nTerminado. Se guardó en {archivo_salida}")
+    print("\nProceso terminado.")
+    print(f"Archivo generado: {ARCHIVO_SALIDA}")
 
 
 if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument("url", help="URL inicial")
-    parser.add_argument(
-        "-o",
-        "--output",
-        default="codigo_fuente.txt",
-        help="Archivo de salida"
-    )
-
-    args = parser.parse_args()
-
-    descargar_paginacion(args.url, args.output)
+    descargar_paginacion()
