@@ -14,8 +14,15 @@ CARPETA_IMAGENES = "imagenes_full"
 ARCHIVO_REPORTE = "reporte_descargas.csv"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/*,*/*;q=0.8",
+    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
 }
+
+# Sesión compartida para mantener cookies entre peticiones (algunos CDNs lo exigen)
+SESION = requests.Session()
+SESION.headers.update(HEADERS)
 
 # Patrón que identifica un thumbnail en la URL. Ajusta si tu sitio usa otro nombre
 # (p.ej. "/thumbs/", "/small/", "-thumb", etc.)
@@ -33,7 +40,7 @@ DELAY_ENTRE_PAGINAS = 1  # segundos, para no saturar el servidor
 # =====================================================
 def obtener_html(url):
     try:
-        respuesta = requests.get(url, headers=HEADERS, timeout=20)
+        respuesta = SESION.get(url, timeout=20)
         respuesta.raise_for_status()
         return respuesta.text
     except Exception as e:
@@ -41,9 +48,10 @@ def obtener_html(url):
         return None
 
 
-def descargar_archivo(url, ruta_destino):
+def descargar_archivo(url, ruta_destino, referer=None):
     try:
-        respuesta = requests.get(url, headers=HEADERS, timeout=30, stream=True)
+        headers_extra = {"Referer": referer} if referer else {}
+        respuesta = SESION.get(url, headers=headers_extra, timeout=30, stream=True)
         respuesta.raise_for_status()
         with open(ruta_destino, "wb") as f:
             for chunk in respuesta.iter_content(chunk_size=8192):
@@ -190,7 +198,7 @@ def procesar_sitio():
                     ruta_destino = f"{base}_{contador}{ext}"
                     contador += 1
 
-                ok, error = descargar_archivo(url_full, ruta_destino)
+                ok, error = descargar_archivo(url_full, ruta_destino, referer=url)
                 if ok:
                     print(f"    [OK] ({metodo}) {url_full}")
                     reporte.append([url, "IMAGEN", url_full, "OK", metodo])
