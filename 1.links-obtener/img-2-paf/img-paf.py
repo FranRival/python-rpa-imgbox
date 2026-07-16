@@ -2,13 +2,14 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import os
+import re
 import time
 import csv
 
 # =====================================================
 # CONFIGURACIÓN
 # =====================================================
-URL = "https://browerstar.com"
+URL = "twik"
 ARCHIVO_SALIDA_HTML = "sitio_completo.html"
 CARPETA_IMAGENES = "imagenes_full"
 ARCHIVO_REPORTE = "reporte_descargas.csv"
@@ -20,31 +21,28 @@ HEADERS = {
     "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
 }
 
-# Sesión compartida para mantener cookies entre peticiones (algunos CDNs lo exigen)
 SESION = requests.Session()
 SESION.headers.update(HEADERS)
 
-# Patrón que identifica un thumbnail en la URL. Ajusta si tu sitio usa otro nombre
-# (p.ej. "/thumbs/", "/small/", "-thumb", etc.)
-PATRON_THUMB = "/thumb/"
-PATRON_FULL = "/full/"
+# Patrón que identifica un thumbnail y una imagen full en la URL
+PATRON_THUMB = "/images/thumb/"
+PATRON_FULL = "/images/full/"
 
-# Extensiones de imagen que nos interesan
-EXTENSIONES_IMAGEN = (".jpg", ".jpeg", ".png", ".gif", ".webp")
-
-DELAY_ENTRE_PAGINAS = 1  # segundos, para no saturar el servidor
+DELAY_ENTRE_PAGINAS = 1     # segundos, entre páginas de galería
+DELAY_ENTRE_DETALLES = 0.5  # segundos, entre páginas de detalle de cada foto
 
 
 # =====================================================
 # FUNCIONES DE RED
 # =====================================================
-def obtener_html(url):
+def obtener_html(url, referer=None):
     try:
-        respuesta = SESION.get(url, timeout=20)
+        headers_extra = {"Referer": referer} if referer else {}
+        respuesta = SESION.get(url, headers=headers_extra, timeout=20)
         respuesta.raise_for_status()
         return respuesta.text
     except Exception as e:
-        print(f"  [ERROR] No se pudo descargar página {url}: {e}")
+        print(f"    [ERROR] No se pudo descargar {url}: {e}")
         return None
 
 
@@ -62,7 +60,7 @@ def descargar_archivo(url, ruta_destino, referer=None):
 
 
 # =====================================================
-# PAGINACIÓN (tu lógica original)
+# PAGINACIÓN (galería)
 # =====================================================
 def encontrar_siguiente(soup, url_actual):
     link = soup.find("link", rel="next")
@@ -87,60 +85,70 @@ def encontrar_siguiente(soup, url_actual):
 
 
 # =====================================================
-# LÓGICA DE THUMBNAIL -> FULL
+# PASO 1: encontrar links de detalle (/photo/{id}/...) en la galería
 # =====================================================
-def es_thumbnail(src_url):
-    return PATRON_THUMB in src_url
-
-
-def convertir_a_full_por_patron(url_thumb):
-    """Fallback: intenta transformar la URL cambiando /thumb/ por /full/."""
-    if PATRON_THUMB in url_thumb:
-        return url_thumb.replace(PATRON_THUMB, PATRON_FULL)
-    return None
-
-
-def extraer_urls_full(soup, url_pagina):
+def extraer_paginas_detalle(soup, url_pagina):
     """
-    Devuelve una lista de (url_full, metodo) encontradas en la página.
-    metodo: 'href_ancla' o 'patron_reemplazo'
+    Devuelve lista de (id_foto, url_detalle) a partir de los <a> que envuelven
+    thumbnails y apuntan a /photo/{id}/...
     """
-    encontradas = []
+    encontrados = []
     vistos = set()
 
     for img in soup.find_all("img"):
         src = img.get("src") or img.get("data-src")
         if not src:
             continue
-
         src_abs = urljoin(url_pagina, src)
+        if PATRON_THUMB not in src_abs:
+            continue
 
-        if not es_thumbnail(src_abs):
-            continue  # no nos interesa si no parece thumbnail
-
-        url_full = None
-        metodo = None
-
-        # Prioridad 1: <a href="..."> que envuelve el <img>
         padre = img.find_parent("a")
-        if padre and padre.get("href"):
-            href_abs = urljoin(url_pagina, padre["href"])
-            if href_abs.lower().endswith(EXTENSIONES_IMAGEN):
-                url_full = href_abs
-                metodo = "href_ancla"
+        if not padre or not padre.get("href"):
+            continue
 
-        # Prioridad 2 (fallback): reemplazo de patrón en la URL
-        if url_full is None:
-            candidata = convertir_a_full_por_patron(src_abs)
-            if candidata:
-                url_full = candidata
-                metodo = "patron_reemplazo"
+        href_abs = urljoin(url_pagina, padre["href"])
+        if href_abs in vistos:
+            continue
 
-        if url_full and url_full not in vistos:
-            vistos.add(url_full)
-            encontradas.append((url_full, metodo))
+        # id de la foto: preferimos el atributo name/id del <a>, si no, del <td>/<img>
+        id_foto = padre.get("name") or img.get("id") or os.path.basename(urlparse(src_abs).path)
 
-    return encontradas
+        vistos.add(href_abs)
+        encontrados.append((id_foto, href_abs))
+
+    return encontrados
+
+
+# =====================================================
+# PASO 2: en la página de detalle, extraer la URL full real
+# =====================================================
+def extraer_url_full_de_detalle(html_detalle, url_detalle):
+    if not html_detalle:
+        return None
+
+    soup = BeautifulSoup(html_detalle, "html.parser")
+
+    # 1) Buscar <img> cuyo src contenga el patrón de full
+    for img in soup.find_all("img"):
+        src = img.get("src") or img.get("data-src")
+        if src and PATRON_FULL in src:
+            return urljoin(url_detalle, src)
+
+    # 2) Buscar <a href> que contenga el patrón de full
+    for a in soup.find_all("a", href=True):
+        if PATRON_FULL in a["href"]:
+            return urljoin(url_detalle, a["href"])
+
+    # 3) Fallback: buscar con regex en todo el HTML crudo (por si está en JS/JSON)
+    match = re.search(
+        r'https?://[^\s"\'<>]+' + re.escape(PATRON_FULL) + r'[^\s"\'<>]+',
+        html_detalle
+    )
+    if match:
+        return match.group(0)
+
+    return None
 
 
 def nombre_archivo_desde_url(url):
@@ -155,20 +163,20 @@ def nombre_archivo_desde_url(url):
 def procesar_sitio():
     os.makedirs(CARPETA_IMAGENES, exist_ok=True)
 
-    visitadas = set()
-    imagenes_descargadas = set()
+    visitadas_galeria = set()
+    detalles_procesados = set()
     reporte = []  # filas para el CSV
 
     url = URL
 
     with open(ARCHIVO_SALIDA_HTML, "w", encoding="utf-8") as archivo_html:
-        while url and url not in visitadas:
-            print(f"\nPágina: {url}")
-            visitadas.add(url)
+        while url and url not in visitadas_galeria:
+            print(f"\nGalería: {url}")
+            visitadas_galeria.add(url)
 
             html = obtener_html(url)
             if html is None:
-                reporte.append([url, "PAGINA", "", "ERROR", "no se pudo descargar la página"])
+                reporte.append([url, "GALERIA", "", "ERROR", "no se pudo descargar la página"])
                 break
 
             archivo_html.write("\n<!-- ====================================================== -->\n")
@@ -179,41 +187,54 @@ def procesar_sitio():
 
             soup = BeautifulSoup(html, "html.parser")
 
-            # --- extraer y descargar imágenes full ---
-            urls_full = extraer_urls_full(soup, url)
-            print(f"  Imágenes full encontradas: {len(urls_full)}")
+            # --- Paso 1: links de detalle ---
+            paginas_detalle = extraer_paginas_detalle(soup, url)
+            print(f"  Fotos encontradas en esta galería: {len(paginas_detalle)}")
 
-            for url_full, metodo in urls_full:
-                if url_full in imagenes_descargadas:
+            for id_foto, url_detalle in paginas_detalle:
+                if url_detalle in detalles_procesados:
                     continue
-                imagenes_descargadas.add(url_full)
+                detalles_procesados.add(url_detalle)
+
+                # --- Paso 2: visitar detalle y extraer URL full ---
+                html_detalle = obtener_html(url_detalle, referer=url)
+                time.sleep(DELAY_ENTRE_DETALLES)
+
+                if html_detalle is None:
+                    reporte.append([url_detalle, "DETALLE", "", "ERROR", "no se pudo descargar página de detalle"])
+                    continue
+
+                url_full = extraer_url_full_de_detalle(html_detalle, url_detalle)
+                if not url_full:
+                    print(f"    [AVISO] No se encontró URL full para foto {id_foto}")
+                    reporte.append([url_detalle, "IMAGEN", "", "NO_ENCONTRADA", f"id={id_foto}"])
+                    continue
 
                 nombre = nombre_archivo_desde_url(url_full)
                 ruta_destino = os.path.join(CARPETA_IMAGENES, nombre)
 
-                # Evitar sobrescribir si ya existe un archivo con el mismo nombre
                 base, ext = os.path.splitext(ruta_destino)
                 contador = 1
                 while os.path.exists(ruta_destino):
                     ruta_destino = f"{base}_{contador}{ext}"
                     contador += 1
 
-                ok, error = descargar_archivo(url_full, ruta_destino, referer=url)
+                # Referer = la página de detalle (como haría un navegador real al hacer clic)
+                ok, error = descargar_archivo(url_full, ruta_destino, referer=url_detalle)
                 if ok:
-                    print(f"    [OK] ({metodo}) {url_full}")
-                    reporte.append([url, "IMAGEN", url_full, "OK", metodo])
+                    print(f"    [OK] {id_foto} -> {ruta_destino}")
+                    reporte.append([url_detalle, "IMAGEN", url_full, "OK", ""])
                 else:
-                    print(f"    [ERROR] ({metodo}) {url_full} -> {error}")
-                    reporte.append([url, "IMAGEN", url_full, "ERROR", error])
+                    print(f"    [ERROR] {id_foto} -> {error}")
+                    reporte.append([url_detalle, "IMAGEN", url_full, "ERROR", error])
 
-            # --- siguiente página ---
+            # --- siguiente página de galería ---
             siguiente = encontrar_siguiente(soup, url)
-            if siguiente in visitadas:
+            if siguiente in visitadas_galeria:
                 break
             url = siguiente
             time.sleep(DELAY_ENTRE_PAGINAS)
 
-    # Guardar reporte CSV
     with open(ARCHIVO_REPORTE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["pagina_origen", "tipo", "url_recurso", "estado", "detalle"])
@@ -221,9 +242,11 @@ def procesar_sitio():
 
     print("\n" + "=" * 55)
     print("Proceso terminado.")
-    print(f"Páginas visitadas: {len(visitadas)}")
+    print(f"Galerías visitadas: {len(visitadas_galeria)}")
+    print(f"Páginas de detalle procesadas: {len(detalles_procesados)}")
     print(f"Imágenes descargadas: {sum(1 for r in reporte if r[3] == 'OK')}")
     print(f"Errores: {sum(1 for r in reporte if r[3] == 'ERROR')}")
+    print(f"No encontradas: {sum(1 for r in reporte if r[3] == 'NO_ENCONTRADA')}")
     print(f"HTML guardado en: {ARCHIVO_SALIDA_HTML}")
     print(f"Imágenes guardadas en: {CARPETA_IMAGENES}/")
     print(f"Reporte detallado: {ARCHIVO_REPORTE}")
