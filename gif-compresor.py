@@ -39,7 +39,7 @@ import subprocess
 # ============================ CONFIGURACIÓN ============================
 
 # Carpeta madre que contiene las 500 subcarpetas con tus GIFs
-CARPETA_ORIGEN = r"C:\Users\dell\Downloads\Newfolder"
+CARPETA_ORIGEN = r"C:\Users\dell\Downloads\descarga\links4\[a"
 
 # Peso máximo permitido, en MB (el servidor pide menos de 10 MB)
 LIMITE_MB = 9.5  # dejo un pequeño margen de seguridad respecto a los 10 MB

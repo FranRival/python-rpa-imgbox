@@ -9,7 +9,7 @@ import csv
 # =====================================================
 # CONFIGURACIÓN
 # =====================================================
-URL = "https://www.--"
+URL = "https://www.imagefap.com/pictures/13605152/Turd%20Tunnels%20of%20Love%201?gid=13605152&page=0&view=0"
 ARCHIVO_SALIDA_HTML = "sitio_completo.html"
 CARPETA_IMAGENES = "imagenes_full"
 ARCHIVO_REPORTE = "reporte_descargas.csv"
