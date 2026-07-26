@@ -10,8 +10,9 @@ sys.stdin = open(os.devnull)
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
 
 from openpyxl import Workbook, load_workbook
@@ -21,8 +22,11 @@ from openpyxl import Workbook, load_workbook
 # CONFIGURACIÓN
 # =========================
 
-IMGBOX_URL = "https://imgbox.com/upload"
-ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
+FREEIMAGE_URL = "https://freeimage.host/es-mx"
+ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}  # freeimage.host no acepta .mp4
+
+# Dominios válidos que puede devolver el HTML generado (freeimage.host usa iili.io como CDN)
+DOMINIOS_VALIDOS = ("freeimage.host", "iili.io")
 
 
 # =========================
@@ -84,58 +88,131 @@ def write_html_to_excel(excel_path, folder_name, html):
 def init_driver():
     options = webdriver.ChromeOptions()
     options.add_argument("--start-maximized")
+    # Evita el diálogo nativo "guardar contraseña" / notificaciones que puedan tapar botones
+    options.add_experimental_option("prefs", {
+        "profile.default_content_setting_values.notifications": 2
+    })
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
     driver.set_page_load_timeout(60)
     return driver
 
 
-def seleccionar_adult_content(driver):
+def cerrar_popups(driver):
+    """Cierra banners de cookies u overlays que puedan bloquear clics."""
+    posibles_textos = ["Aceptar", "Accept", "OK", "Entendido"]
+    for texto in posibles_textos:
+        try:
+            btn = driver.find_element(
+                By.XPATH, f"//button[contains(normalize-space(.),'{texto}')]"
+            )
+            driver.execute_script("arguments[0].click();", btn)
+            time.sleep(1)
+        except NoSuchElementException:
+            pass
+
+
+# =========================
+# PASO 1: SELECCIONAR ARCHIVOS
+# =========================
+
+def seleccionar_archivos(driver, archivos):
+    wait = WebDriverWait(driver, 30)
+    input_file = wait.until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
+    )
+    # No hace falta que sea visible para send_keys en Selenium con Chrome
+    input_file.send_keys("\n".join(archivos))
     time.sleep(2)
-    driver.execute_script("""
-        try {
-            var s = document.getElementById('dropdown-content-type');
-            if (s) {
-                s.value = '2';
-                s.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-            if (typeof $ !== 'undefined' && $.fn.selectpicker) {
-                $('#dropdown-content-type').selectpicker('val','2');
-                $('#dropdown-content-type').selectpicker('refresh');
-            }
-        } catch(e) {}
-    """)
-    time.sleep(1)
 
 
 # =========================
-# ESPERA REAL (SIN TIMEOUT)
+# PASO 2: CLIC EN BOTÓN VERDE "SUBIR"
 # =========================
 
-def extract_fullsize_html(driver):
+def click_boton_subir(driver):
+    wait = WebDriverWait(driver, 30)
+
+    # El botón verde "Subir" aparece SOLO después de cargar miniaturas en la cola.
+    # Se busca por texto exacto de <button> para no confundirlo con el link "Subir" del menú superior.
+    boton = wait.until(
+        EC.element_to_be_clickable(
+            (By.XPATH, "//button[normalize-space(text())='Subir']")
+        )
+    )
+    driver.execute_script("arguments[0].click();", boton)
+
+
+# =========================
+# PASO 3: ESPERAR "SUBIDA COMPLETA"
+# =========================
+
+def esperar_subida_completa(driver, timeout=300):
+    print("⌛ Esperando a que la subida termine (Subida completa)...")
+    wait = WebDriverWait(driver, timeout)
+    wait.until(
+        EC.presence_of_element_located(
+            (By.XPATH, "//*[contains(text(),'Subida completa')]")
+        )
+    )
+    print("✅ Subida completa detectada")
+
+
+# =========================
+# PASO 4: ELEGIR "HTML completo con enlace" EN EL SELECT
+# =========================
+
+def seleccionar_html_completo(driver):
+    wait = WebDriverWait(driver, 30)
+
+    select_el = wait.until(
+        EC.presence_of_element_located(
+            (By.XPATH, "//select[option[contains(text(),'HTML completo con enlace')]]")
+        )
+    )
+
+    sel = Select(select_el)
+    sel.select_by_visible_text("HTML completo con enlace")
+    time.sleep(1.5)  # da tiempo a que el textarea se actualice via JS
+
+
+# =========================
+# PASO 5: EXTRAER EL HTML GENERADO
+# =========================
+
+def extraer_html_generado(driver):
+    """
+    Busca, entre todos los <textarea> de la página, el que contiene el código
+    'HTML completo con enlace' (formato <a href="..."><img src="..."></a>)
+    apuntando a los dominios de freeimage.host / iili.io.
+    """
     try:
-        for a in driver.find_elements(By.TAG_NAME, "textarea"):
-            val = (a.get_attribute("value") or "").strip()
+        for area in driver.find_elements(By.TAG_NAME, "textarea"):
+            val = (area.get_attribute("value") or "").strip()
+            if not val:
+                continue
             lower = val.lower()
-            if val and "<img" in val and "imgbox.com" in lower and "thumb" not in lower:
+            if "<img" in lower and "<a href" in lower and any(d in lower for d in DOMINIOS_VALIDOS):
                 return val
-    except:
+    except Exception:
         pass
     return ""
 
 
-def esperar_html_final(driver):
-    print("⌛ Esperando HTML FINAL...")
-    while True:
-        html = extract_fullsize_html(driver)
+def esperar_html_final(driver, timeout=60):
+    print("⌛ Esperando HTML FINAL en el textarea...")
+    fin = time.time() + timeout
+    while time.time() < fin:
+        html = extraer_html_generado(driver)
         if html:
             print("✅ HTML detectado")
             return html
-        time.sleep(3)
+        time.sleep(2)
+    raise TimeoutException("No se detectó el HTML generado a tiempo.")
 
 
 # =========================
-# PROCESO DE SUBIDA
+# PROCESO DE SUBIDA POR CARPETA
 # =========================
 
 def subir_carpeta(driver, excel_path, folder):
@@ -151,29 +228,18 @@ def subir_carpeta(driver, excel_path, folder):
 
     nombre_carpeta = os.path.basename(folder)
 
-    # 🔹 NUEVO — ruta completa visible en CMD
     print("\n📁 SUBCARPETA ACTUAL (RUTA COMPLETA):")
     print(folder)
-
     print(f"📦 Archivos: {len(archivos)}")
 
-    driver.get(IMGBOX_URL)
+    driver.get(FREEIMAGE_URL)
     time.sleep(3)
+    cerrar_popups(driver)
 
-    seleccionar_adult_content(driver)
-
-    wait = WebDriverWait(driver, 30)
-    input_file = wait.until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
-    )
-
-    input_file.send_keys("\n".join(archivos))
-    time.sleep(2)
-
-    start_btn = wait.until(
-        EC.element_to_be_clickable((By.ID, "fake-submit-button"))
-    )
-    driver.execute_script("arguments[0].click();", start_btn)
+    seleccionar_archivos(driver, archivos)
+    click_boton_subir(driver)
+    esperar_subida_completa(driver)
+    seleccionar_html_completo(driver)
 
     html = esperar_html_final(driver)
     write_html_to_excel(excel_path, nombre_carpeta, html)
@@ -190,9 +256,7 @@ def main():
 
     batch_root = sys.argv[1]
 
-    print("\n🚀 INICIANDO UPLOADER")
-
-    # 🔹 NUEVO — ruta completa del batch visible
+    print("\n🚀 INICIANDO UPLOADER (freeimage.host)")
     print("📂 RUTA COMPLETA DEL BATCH:")
     print(batch_root)
 
@@ -207,7 +271,12 @@ def main():
     try:
         for idx, carpeta in enumerate(carpetas, 1):
             print(f"\n➡️ {idx}/{len(carpetas)}")
-            subir_carpeta(driver, excel_path, carpeta)
+            try:
+                subir_carpeta(driver, excel_path, carpeta)
+            except Exception:
+                print(f"\n❌ ERROR en la carpeta: {carpeta}")
+                traceback.print_exc()
+                continue  # sigue con la siguiente carpeta en vez de morir todo el batch
 
         print("\n🏁 BATCH COMPLETADO")
 
