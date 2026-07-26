@@ -4,18 +4,18 @@ from pathlib import Path
 # CONFIGURACIÓN
 # ==========================================
 
-CARPETA_RAIZ = r"C:\Users\dell\Downloads\descarga\links5"
+CARPETA_RAIZ = r"C:\Users\dell\Downloads\descarga\links6\[A"
 
 # Tamaño EXACTO del archivo en bytes
 # Ejemplo: 15342
-TAMANO_BYTES = 73989
+TAMANO_BYTES = 8858126
 
 # Extensiones a revisar (o deja vacío para revisar todo)
 EXTENSIONES = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
 # True = solo muestra lo que borraría
 # False = elimina realmente
-MODO_PRUEBA = True
+MODO_PRUEBA = False
 
 # ==========================================
 
