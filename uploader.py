@@ -7,19 +7,11 @@ from pathlib import Path
 # 🔥 EVITA BLOQUEOS DE CMD / .BAT
 sys.stdin = open(os.devnull)
 
-# 🔥 EVITA QUE CMD "TRAGUE" LOS PRINTS (buffering) — así se ven en tiempo real
-try:
-    sys.stdout.reconfigure(line_buffering=True)
-    sys.stderr.reconfigure(line_buffering=True)
-except Exception:
-    pass
-
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.support.ui import WebDriverWait, Select
+from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
 
 from openpyxl import Workbook, load_workbook
@@ -29,11 +21,8 @@ from openpyxl import Workbook, load_workbook
 # CONFIGURACIÓN
 # =========================
 
-FREEIMAGE_URL = "https://freeimage.host/es-mx"
-ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}  # freeimage.host no acepta .mp4
-
-# Dominios válidos que puede devolver el HTML generado (freeimage.host usa iili.io como CDN)
-DOMINIOS_VALIDOS = ("freeimage.host", "iili.io")
+IMGBOX_URL = "https://imgbox.com/upload"
+ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
 
 
 # =========================
@@ -95,173 +84,58 @@ def write_html_to_excel(excel_path, folder_name, html):
 def init_driver():
     options = webdriver.ChromeOptions()
     options.add_argument("--start-maximized")
-    # Evita el diálogo nativo "guardar contraseña" / notificaciones que puedan tapar botones
-    options.add_experimental_option("prefs", {
-        "profile.default_content_setting_values.notifications": 2
-    })
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
     driver.set_page_load_timeout(60)
     return driver
 
 
-def cerrar_popups(driver):
-    """Cierra banners de cookies u overlays que puedan bloquear clics."""
-    posibles_textos = ["Aceptar", "Accept", "OK", "Entendido"]
-    for texto in posibles_textos:
-        try:
-            btn = driver.find_element(
-                By.XPATH, f"//button[contains(normalize-space(.),'{texto}')]"
-            )
-            driver.execute_script("arguments[0].click();", btn)
-            time.sleep(1)
-        except NoSuchElementException:
-            pass
-
-
-# =========================
-# IDs REALES confirmados a partir del HTML fuente de freeimage.host
-# (motor Chevereto). Nada de esto se adivina: son los ids/valores exactos.
-# =========================
-ID_INPUT_ARCHIVOS = "anywhere-upload-input"          # <input type="file"> real
-SELECTOR_BOTON_SUBIR = "[data-action='upload']"       # <button data-action="upload">Subir</button>
-SELECTOR_RESULTADO_EXITO = "[data-group='upload-result'][data-result='success']"
-SELECTOR_RESULTADO_ERROR = "[data-group='upload-result'][data-result='error']"
-ID_SELECT_CODIGOS = "uploaded-embed-toggle"           # <select> real del resultado (NO el del modal "form-embed-toggle")
-VALUE_HTML_MEDIO = "html-embed-medium"                # value de "HTML completo con enlace"
-ID_TEXTAREA_HTML_MEDIO = "uploaded-embed-code-1"      # <textarea> que siempre contiene ese formato
-
-
-# =========================
-# PASO 1: SELECCIONAR ARCHIVOS
-# =========================
-
-def seleccionar_archivos(driver, archivos):
-    wait = WebDriverWait(driver, 30)
-    input_file = wait.until(
-        EC.presence_of_element_located((By.ID, ID_INPUT_ARCHIVOS))
-    )
-    # No hace falta que sea visible para send_keys en Selenium con Chrome
-    input_file.send_keys("\n".join(archivos))
+def seleccionar_adult_content(driver):
     time.sleep(2)
-
-
-# =========================
-# PASO 2: CLIC EN BOTÓN VERDE "SUBIR"
-# =========================
-
-def click_boton_subir(driver):
-    wait = WebDriverWait(driver, 30)
-    # <button data-action="upload" ...>Subir</button> — atributo único y estable,
-    # no depende del idioma ni del texto visible.
-    boton = wait.until(
-        EC.element_to_be_clickable((By.CSS_SELECTOR, SELECTOR_BOTON_SUBIR))
-    )
-    driver.execute_script("arguments[0].click();", boton)
-
-
-# =========================
-# PASO 3: ESPERAR "SUBIDA COMPLETA"
-# =========================
-
-def esperar_subida_completa(driver, timeout=300):
-    """
-    El sitio controla el estado mostrando/ocultando divs mediante la clase
-    'soft-hidden' (que en su CSS es literalmente display:none). El resultado
-    exitoso vive en:
-        <div data-group="upload-result" data-result="success" class="soft-hidden">
-    Cuando la subida termina, el sitio le QUITA la clase 'soft-hidden' a este
-    div. Chequeamos eso directamente (is_displayed) en vez de buscar texto.
-    """
-    print("⌛ Esperando a que la subida termine (Subida completa)...")
-    fin = time.time() + timeout
-    intentos = 0
-    while time.time() < fin:
-        exitos = driver.find_elements(By.CSS_SELECTOR, SELECTOR_RESULTADO_EXITO)
-        if any(e.is_displayed() for e in exitos):
-            print("✅ Subida completa detectada")
-            return
-
-        errores = driver.find_elements(By.CSS_SELECTOR, SELECTOR_RESULTADO_ERROR)
-        visibles_error = [e for e in errores if e.is_displayed()]
-        if visibles_error:
-            texto_error = visibles_error[0].text.strip()
-            raise RuntimeError(f"El sitio reportó un error de subida: {texto_error!r}")
-
-        intentos += 1
-        if intentos % 15 == 0:
-            print(f"   ...sigue subiendo ({intentos * 2}s transcurridos)")
-        time.sleep(2)
-
-    raise TimeoutException("La subida no terminó (no se detectó 'Subida completa' visible) a tiempo.")
-
-
-# =========================
-# PASO 4: ELEGIR "HTML completo con enlace" EN EL SELECT
-# =========================
-
-def seleccionar_html_completo(driver, timeout=30):
-    """
-    <select id="uploaded-embed-toggle"> es el select REAL del panel de
-    resultados (distinto del <select id="form-embed-toggle"> que pertenece a
-    un modal aparte que no se usa en este flujo). Su value para el formato
-    que queremos es 'html-embed-medium'.
-    """
-    print(f"🔍 Buscando el selector '{ID_SELECT_CODIGOS}'...")
-    fin = time.time() + timeout
-    select_el = None
-
-    while time.time() < fin:
-        candidatos = driver.find_elements(By.ID, ID_SELECT_CODIGOS)
-        if candidatos:
-            select_el = candidatos[0]
-            break
-        time.sleep(0.5)
-
-    if select_el is None:
-        raise TimeoutException(f"No se encontró el <select id='{ID_SELECT_CODIGOS}'> a tiempo.")
-
-    print(f"✅ Select encontrado. Fijando value='{VALUE_HTML_MEDIO}'...")
-    driver.execute_script(
-        """
-        var select = arguments[0];
-        select.value = arguments[1];
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-        """,
-        select_el,
-        VALUE_HTML_MEDIO,
-    )
+    driver.execute_script("""
+        try {
+            var s = document.getElementById('dropdown-content-type');
+            if (s) {
+                s.value = '2';
+                s.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            if (typeof $ !== 'undefined' && $.fn.selectpicker) {
+                $('#dropdown-content-type').selectpicker('val','2');
+                $('#dropdown-content-type').selectpicker('refresh');
+            }
+        } catch(e) {}
+    """)
     time.sleep(1)
 
 
 # =========================
-# PASO 5: EXTRAER EL HTML GENERADO
+# ESPERA REAL (SIN TIMEOUT)
 # =========================
 
-def extraer_html_generado(driver, timeout=60):
-    """
-    El textarea con id='uploaded-embed-code-1' SIEMPRE contiene el código
-    'HTML completo con enlace' (así el <select> no esté en esa opción, el
-    combo ya viene pre-armado en el DOM para cada formato — confirmado en el
-    HTML fuente). Por eso lo leemos directo por id, sin adivinar patrones.
-    """
-    print("⌛ Esperando el HTML en el textarea...")
-    fin = time.time() + timeout
-    while time.time() < fin:
-        try:
-            area = driver.find_element(By.ID, ID_TEXTAREA_HTML_MEDIO)
-            val = (area.get_attribute("value") or "").strip()
-            if val:
-                print("✅ HTML detectado")
+def extract_fullsize_html(driver):
+    try:
+        for a in driver.find_elements(By.TAG_NAME, "textarea"):
+            val = (a.get_attribute("value") or "").strip()
+            lower = val.lower()
+            if val and "<img" in val and "imgbox.com" in lower and "thumb" not in lower:
                 return val
-        except NoSuchElementException:
-            pass
-        time.sleep(1)
-    raise TimeoutException(f"No se detectó contenido en el <textarea id='{ID_TEXTAREA_HTML_MEDIO}'> a tiempo.")
+    except:
+        pass
+    return ""
+
+
+def esperar_html_final(driver):
+    print("⌛ Esperando HTML FINAL...")
+    while True:
+        html = extract_fullsize_html(driver)
+        if html:
+            print("✅ HTML detectado")
+            return html
+        time.sleep(3)
 
 
 # =========================
-# PROCESO DE SUBIDA POR CARPETA
+# PROCESO DE SUBIDA
 # =========================
 
 def subir_carpeta(driver, excel_path, folder):
@@ -277,20 +151,31 @@ def subir_carpeta(driver, excel_path, folder):
 
     nombre_carpeta = os.path.basename(folder)
 
+    # 🔹 NUEVO — ruta completa visible en CMD
     print("\n📁 SUBCARPETA ACTUAL (RUTA COMPLETA):")
     print(folder)
+
     print(f"📦 Archivos: {len(archivos)}")
 
-    driver.get(FREEIMAGE_URL)
+    driver.get(IMGBOX_URL)
     time.sleep(3)
-    cerrar_popups(driver)
 
-    seleccionar_archivos(driver, archivos)
-    click_boton_subir(driver)
-    esperar_subida_completa(driver)
-    seleccionar_html_completo(driver)
+    seleccionar_adult_content(driver)
 
-    html = extraer_html_generado(driver)
+    wait = WebDriverWait(driver, 30)
+    input_file = wait.until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
+    )
+
+    input_file.send_keys("\n".join(archivos))
+    time.sleep(2)
+
+    start_btn = wait.until(
+        EC.element_to_be_clickable((By.ID, "fake-submit-button"))
+    )
+    driver.execute_script("arguments[0].click();", start_btn)
+
+    html = esperar_html_final(driver)
     write_html_to_excel(excel_path, nombre_carpeta, html)
 
 
@@ -305,7 +190,9 @@ def main():
 
     batch_root = sys.argv[1]
 
-    print("\n🚀 INICIANDO UPLOADER (freeimage.host)")
+    print("\n🚀 INICIANDO UPLOADER")
+
+    # 🔹 NUEVO — ruta completa del batch visible
     print("📂 RUTA COMPLETA DEL BATCH:")
     print(batch_root)
 
@@ -320,12 +207,7 @@ def main():
     try:
         for idx, carpeta in enumerate(carpetas, 1):
             print(f"\n➡️ {idx}/{len(carpetas)}")
-            try:
-                subir_carpeta(driver, excel_path, carpeta)
-            except Exception:
-                print(f"\n❌ ERROR en la carpeta: {carpeta}")
-                traceback.print_exc()
-                continue  # sigue con la siguiente carpeta en vez de morir todo el batch
+            subir_carpeta(driver, excel_path, carpeta)
 
         print("\n🏁 BATCH COMPLETADO")
 
