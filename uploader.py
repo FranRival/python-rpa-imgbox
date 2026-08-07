@@ -7,12 +7,24 @@ from pathlib import Path
 # 🔥 EVITA BLOQUEOS DE CMD / .BAT
 sys.stdin = open(os.devnull)
 
+# =========================
+# LOG A ARCHIVO (útil cuando corre desatendido vía .bat)
+# =========================
+LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploader_log.txt")
+
+def log(msg):
+    print(msg)
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+    except Exception:
+        pass
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
 
 from openpyxl import Workbook, load_workbook
 
@@ -28,6 +40,24 @@ ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"}
 # =========================
 # UTILIDADES
 # =========================
+
+def pausar_y_salir(codigo=1):
+    """
+    Si se ejecuta interactivamente (doble clic / terminal), espera ENTER
+    para que la ventana no se cierre sola.
+    Si se ejecuta desde el .bat orquestador (stdin = nul), NO intenta leer
+    input (eso lanzaría EOFError) y simplemente termina con el código dado.
+    """
+    try:
+        interactivo = sys.stdin.isatty()
+    except Exception:
+        interactivo = False
+
+    if interactivo:
+        input("\nPresiona ENTER para salir...")
+
+    sys.exit(codigo)
+
 
 def obtener_subcarpetas(root):
     return [
@@ -81,11 +111,32 @@ def write_html_to_excel(excel_path, folder_name, html):
 # SELENIUM
 # =========================
 
+# Ruta al chromedriver descargado manualmente desde
+# https://googlechromelabs.github.io/chrome-for-testing/
+# (evita que Selenium Manager se cuelgue intentando auto-detectar la versión)
+CHROMEDRIVER_PATH = r"C:\chromedriver\chromedriver.exe"
+
+
 def init_driver():
+    """
+    Abre Chrome usando el chromedriver descargado manualmente (ruta fija),
+    evitando por completo la auto-detección de Selenium Manager / webdriver_manager,
+    que se estaba colgando indefinidamente con Chrome 151.
+    """
     options = webdriver.ChromeOptions()
     options.add_argument("--start-maximized")
-    service = Service(ChromeDriverManager().install())
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+
+    if not os.path.exists(CHROMEDRIVER_PATH):
+        raise FileNotFoundError(
+            f"No se encontró chromedriver en: {CHROMEDRIVER_PATH}\n"
+            f"Verifica que lo descargaste y descomprimiste ahí."
+        )
+
+    service = Service(executable_path=CHROMEDRIVER_PATH)
     driver = webdriver.Chrome(service=service, options=options)
+    print("✅ Chrome iniciado con chromedriver manual")
     driver.set_page_load_timeout(60)
     return driver
 
@@ -151,10 +202,8 @@ def subir_carpeta(driver, excel_path, folder):
 
     nombre_carpeta = os.path.basename(folder)
 
-    # 🔹 NUEVO — ruta completa visible en CMD
     print("\n📁 SUBCARPETA ACTUAL (RUTA COMPLETA):")
     print(folder)
-
     print(f"📦 Archivos: {len(archivos)}")
 
     driver.get(IMGBOX_URL)
@@ -184,15 +233,19 @@ def subir_carpeta(driver, excel_path, folder):
 # =========================
 
 def main():
+    # --- Validar argumento ---
     if len(sys.argv) < 2:
         print("❌ No se recibió ruta del batch")
-        sys.exit(1)
+        print("Uso: python uploader_corregido.py \"C:\\ruta\\al\\batch\"")
+        pausar_y_salir(1)
 
     batch_root = sys.argv[1]
 
-    print("\n🚀 INICIANDO UPLOADER")
+    if not os.path.isdir(batch_root):
+        print(f"❌ La ruta no existe o no es una carpeta: {batch_root}")
+        pausar_y_salir(1)
 
-    # 🔹 NUEVO — ruta completa del batch visible
+    print("\n🚀 INICIANDO UPLOADER")
     print("📂 RUTA COMPLETA DEL BATCH:")
     print(batch_root)
 
@@ -202,7 +255,18 @@ def main():
     carpetas = obtener_subcarpetas(batch_root)
     print(f"📁 Total carpetas: {len(carpetas)}")
 
-    driver = init_driver()
+    if not carpetas:
+        print("⚠️ No se encontraron subcarpetas en el batch. Nada que hacer.")
+        pausar_y_salir(0)
+
+    # --- Abrir Chrome con manejo de errores explícito ---
+    try:
+        driver = init_driver()
+    except Exception:
+        log("\n❌ ERROR CRÍTICO: no se pudo abrir Chrome")
+        log(traceback.format_exc())
+        pausar_y_salir(1)
+        return  # nunca llega aquí, pero por claridad
 
     try:
         for idx, carpeta in enumerate(carpetas, 1):
@@ -212,13 +276,15 @@ def main():
         print("\n🏁 BATCH COMPLETADO")
 
     except Exception:
-        print("\n❌ ERROR CRÍTICO")
+        print("\n❌ ERROR CRÍTICO DURANTE LA EJECUCIÓN")
         traceback.print_exc()
 
     finally:
         time.sleep(5)
         driver.quit()
         print("✅ Proceso terminado")
+
+    pausar_y_salir(0)
 
 
 if __name__ == "__main__":
