@@ -6,10 +6,10 @@ from PIL import Image
 # =========================
 
 # Carpeta origen
-CARPETA_ORIGEN = r"C:\Users\dell\Downloads\descarga\links8\Marcas"
+CARPETA_ORIGEN = r"C:\Users\dell\Downloads\marcas"
 
 # Carpeta destino (Descargas)
-CARPETA_DESTINO = r"C:\Users\dell\Downloads\lmi_recortadas"
+CARPETA_DESTINO = r"C:\Users\dell\Downloads\2"
 
 PORCENTAJE_CORTE = 0.10   # 10% por lado
 ANCHO_MINIMO = 600        # px

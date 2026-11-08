@@ -16,7 +16,7 @@ def extract_urls(html_text):
     if not html_text:
         return []
 
-    pattern = r"(https://images2\.imgbox\.com/[^\s\"'>]+)"
+    pattern = r"(https://images4\.imgbox\.com/[^\s\"'>]+)"
     return re.findall(pattern, html_text)
 
 
