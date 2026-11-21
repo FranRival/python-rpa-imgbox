@@ -31,6 +31,7 @@ import hashlib
 import re
 import shutil
 import subprocess
+import threading
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
@@ -462,14 +463,17 @@ def puntuar_detalle(html: str, url: str, originales: bool, excluir) -> dict[str,
     soup = BeautifulSoup(html, "html.parser")
     puntos: dict[str, float] = {}
 
-    def sumar(crudo: str, pts: float, sin_ext: bool = False) -> None:
+    def sumar(crudo: str, pts: float, sin_ext: bool = False, cualquiera: bool = False) -> None:
         u = urljoin(url, crudo.strip()).split("#")[0]
         if not u.startswith(("http://", "https://")):
             return
         if originales:
             u = WP_SIZE.sub("", u)
         ext = extension(u)
-        if ext not in MEDIA_EXT and not (sin_ext and ext not in EXT_NO_MEDIA):
+        if cualquiera:  # enlace que envuelve la imagen: puede ser la página "ver imagen"
+            if u.rstrip("/") == url.rstrip("/"):
+                return
+        elif ext not in MEDIA_EXT and not (sin_ext and ext not in EXT_NO_MEDIA):
             return  # (sin_ext: <img src="/img/123"> sin extensión también cuenta)
         if u in excluir:
             return
@@ -486,6 +490,9 @@ def puntuar_detalle(html: str, url: str, originales: bool, excluir) -> dict[str,
             base += 2
         if el.find_parent(["header", "footer", "nav", "aside"]):
             base -= 4
+        if el.name == "a" and el.get("href") and el.find("img") \
+                and not el.find_parent(["header", "footer", "nav", "aside"]):
+            sumar(el["href"], -2, cualquiera=True)  # respaldo: URL > URL > imagen
         ancho = _num(el.get("width"))
         base += min(ancho * _num(el.get("height")) / 50000, 6)
         if 0 < ancho < 120:
@@ -563,7 +570,10 @@ def media_de_detalle(sesion, url, referer, originales, excluir,
         return set()
     if todas:
         return set(puntos)
-    return {max(puntos, key=puntos.get)}
+    orden = sorted(puntos.items(), key=lambda kv: -kv[1])
+    mejor = orden[0][0]
+    ALTERNATIVAS[mejor] = [u for u, pts in orden[1:6] if pts > -6]
+    return {mejor}
 
 
 def nombre_archivo(url: str, usados: set[str]) -> str:
@@ -575,9 +585,39 @@ def nombre_archivo(url: str, usados: set[str]) -> str:
     return nombre
 
 
+HTML_RESPUESTAS: dict[str, tuple[str, str]] = {}   # url -> (html devuelto, url final)
+ALTERNATIVAS: dict[str, list[str]] = {}               # imagen elegida -> otros candidatos de su página
+_DEBUG_HTML: list[str] = []
+_LOCK = threading.Lock()
+_EXT_VIDEO = {".mp4", ".webm", ".mkv", ".mov", ".avi", ".m4v", ".flv", ".wmv", ".m3u8"}
+_EXT_AUDIO = {".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".opus"}
+_ACCEPT = {
+    "image": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+    "video": "video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5",
+    "audio": "audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,*/*;q=0.5",
+}
+
+
+def cabeceras_descarga(sesion: requests.Session, url: str, ref: str) -> dict[str, str]:
+    """Cabeceras como las de un navegador cuando carga una <img> (no una página)."""
+    h: dict[str, str] = {}
+    if ref:
+        h["Referer"] = ref
+    ext = extension(url)
+    tipo = "video" if ext in _EXT_VIDEO else "audio" if ext in _EXT_AUDIO else "image"
+    if "text/html" in sesion.headers.get("Accept", ""):  # no pisar el Accept importado del navegador
+        h["Accept"] = _ACCEPT[tipo]
+    if not any(k.lower().startswith("sec-fetch") for k in sesion.headers):
+        mismo = bool(ref) and urlparse(ref).netloc == urlparse(url).netloc
+        h.update({"Sec-Fetch-Dest": tipo, "Sec-Fetch-Mode": "no-cors",
+                  "Sec-Fetch-Site": "same-origin" if mismo else "cross-site"})
+    return h
+
+
 def descargar(sesion: requests.Session, url: str, destino: Path, referer: str) -> str:
     """Descarga en streaming. Devuelve 'ok', 'omitido' o 'error: ...'.
-    Si la URL no trae extensión (ej. /img/123), se deduce del Content-Type."""
+    Si la URL no trae extensión (ej. /img/123), se deduce del Content-Type.
+    Si el servidor responde con una página HTML, la guarda en HTML_RESPUESTAS para seguir la cadena."""
     if destino.suffix:
         if destino.exists() and destino.stat().st_size > 0:
             return "omitido"
@@ -586,12 +626,22 @@ def descargar(sesion: requests.Session, url: str, destino: Path, referer: str) -
     tmp = None
     try:
         ref = REFERER_FIJO or referer
-        headers = {"Referer": ref} if ref else {}
-        with sesion.get(url, stream=True, timeout=30, headers=headers) as r:
+        with sesion.get(url, stream=True, timeout=30, headers=cabeceras_descarga(sesion, url, ref)) as r:
             r.raise_for_status()
             ct = r.headers.get("Content-Type", "").split(";")[0].strip().lower()
             if ct.startswith("text/html"):
-                return "error: el servidor devolvió una página HTML en vez del archivo (¿protección anti-descarga o login?)"
+                trozos, leidos = [], 0
+                for b in r.iter_content(CHUNK):
+                    trozos.append(b)
+                    leidos += len(b)
+                    if leidos > 2_000_000:
+                        break
+                texto = b"".join(trozos).decode(r.encoding or "utf-8", errors="ignore")
+                with _LOCK:
+                    HTML_RESPUESTAS[url] = (texto, r.url)
+                t = re.search(r"<title[^>]*>(.*?)</title>", texto, re.I | re.S)
+                resumen = (t.group(1) if t else re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", texto))).strip()[:80]
+                return f'error: el servidor devolvió una página HTML en vez del archivo ("{resumen}")'
             if not destino.suffix:
                 ext = CT_EXT.get(ct)
                 if not ext:
@@ -610,6 +660,56 @@ def descargar(sesion: requests.Session, url: str, destino: Path, referer: str) -
         if tmp is not None and tmp.exists():
             tmp.unlink(missing_ok=True)
         return f"error: {describir_error(e)}"
+
+
+def descargar_resolviendo(sesion, url, ref, carpeta, usados, originales, pref="", nivel=0, visitados=None):
+    """Descarga `url`. Si en vez del archivo llega una página HTML (URL > URL > imagen), busca dentro
+    de esa página la imagen real; si no, prueba los otros candidatos de la página de origen.
+    Devuelve (resultado, url_que_funcionó)."""
+    visitados = visitados if visitados is not None else set()
+    visitados.add(url)
+    with _LOCK:
+        base = nombre_archivo(url, usados)
+    nombre = f"{pref}_{base}" if pref and pref not in base else base
+    res = descargar(sesion, url, carpeta / nombre, ref)
+    if not res.startswith("error"):
+        return res, url
+    with _LOCK:
+        usados.discard(base)  # el intento falló: el nombre queda libre para el que sí funcione
+    html0 = HTML_RESPUESTAS.get(url)
+
+    candidatos: list[tuple[str, str]] = []  # (url, referer)
+    if nivel < 3:
+        if url in HTML_RESPUESTAS:
+            texto, base_html = HTML_RESPUESTAS[url]
+            pts = puntuar_detalle(texto, base_html or url, originales, frozenset(visitados))
+            candidatos += [(u, url) for u, _ in sorted(pts.items(), key=lambda kv: -kv[1])[:3]]
+        candidatos += [(u, ref) for u in ALTERNATIVAS.get(url, [])]
+    for c, r2 in candidatos:
+        if c in visitados:
+            continue
+        res2, usada = descargar_resolviendo(sesion, c, r2, carpeta, usados, originales, pref, nivel + 1, visitados)
+        if not res2.startswith("error"):
+            HTML_RESPUESTAS.pop(url, None)
+            ALTERNATIVAS.pop(url, None)
+            return res2, usada
+
+    # sin salida: guarda una muestra de lo que devolvió el servidor para poder revisarla
+    if nivel == 0 and html0 is not None:
+        with _LOCK:
+            guardar = len(_DEBUG_HTML) < 3
+            if guardar:
+                _DEBUG_HTML.append(url)
+                n = len(_DEBUG_HTML)
+        if guardar:
+            try:
+                (carpeta / f"_respuesta_html_{n}.html").write_text(
+                    f"<!-- {url} -->\n{html0[0]}", encoding="utf-8", errors="ignore")
+            except OSError:
+                pass
+    HTML_RESPUESTAS.pop(url, None)
+    ALTERNATIVAS.pop(url, None)
+    return res, url
 
 
 def usar_ytdlp(url: str, carpeta: Path) -> None:
@@ -691,28 +791,30 @@ def seguir_grid(sesion, html, url, medios, vistos_enlaces, args, log_errores, re
     return len(pendientes)
 
 
-def descargar_lote(sesion, medios, carpeta, usados, workers, referer, log_errores, referers=None):
+def descargar_lote(sesion, medios, carpeta, usados, workers, referer, log_errores,
+                   referers=None, originales=False):
     referers = referers or {}
-    ok = omit = err = 0
+    ok = omit = err = alt = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         tareas = {}
         for m in sorted(medios):
             ref = referers.get(m, referer)
-            nombre = nombre_archivo(m, usados)
-            if m in referers:  # viene de una página /s/NUMERO: el número ordena y evita choques
-                pref = slug(Path(urlparse(ref).path.rstrip("/")).name, 40)
-                if pref and pref not in nombre:
-                    nombre = f"{pref}_{nombre}"
-            tareas[pool.submit(descargar, sesion, m, carpeta / nombre, ref)] = (m, ref)
+            # viene de una página /s/NUMERO: el número ordena y evita choques de nombre
+            pref = slug(Path(urlparse(ref).path.rstrip("/")).name, 40) if m in referers else ""
+            tareas[pool.submit(descargar_resolviendo, sesion, m, ref, carpeta, usados, originales, pref)] = (m, ref)
         for fut in as_completed(tareas):
-            res = fut.result()
+            m, ref = tareas[fut]
+            res, usada = fut.result()
             if res == "ok":
                 ok += 1
+                if usada != m:
+                    alt += 1
+                    if alt <= 3:
+                        print(f"      (la URL elegida devolvía HTML; la imagen real estaba en: {usada})")
             elif res == "omitido":
                 omit += 1
             else:
                 err += 1
-                m, ref = tareas[fut]
                 log_errores.append(f"{m}\t{ref}\t{res}")
                 if err <= 5:
                     print(f"      {res}  <- {m}")
@@ -811,7 +913,7 @@ def procesar_url(sesion, entrada, base_salida, args, log_errores):
             lista_prueba.extend(sorted(nuevos_medios))
         else:
             ok, omit, err = descargar_lote(sesion, nuevos_medios, carpeta, usados,
-                                           args.workers, pagina_url, log_errores, referers)
+                                           args.workers, pagina_url, log_errores, referers, originales)
             tot_ok, tot_omit, tot_err = tot_ok + ok, tot_omit + omit, tot_err + err
             print(f"   descargados: {ok} | ya existían: {omit} | errores: {err}")
 
