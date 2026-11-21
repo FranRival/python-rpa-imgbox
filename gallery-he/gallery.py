@@ -15,6 +15,7 @@ Uso:
     python respaldar_media.py --ytdlp              # además intenta videos de YouTube/Vimeo/etc.
                                                    # (requiere: pip install yt-dlp)
 
+PROBLEMA: no detecta las imagenes grid. no las persigue.
 urls.txt: una URL por línea. Las líneas que empiezan con # se ignoran.
 Es reanudable: si lo vuelves a correr, salta lo que ya se descargó.
 """
