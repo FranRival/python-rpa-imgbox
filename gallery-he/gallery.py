@@ -13,7 +13,7 @@ Uso:
     python respaldar_media.py -i mis_urls.txt -o D:/respaldo -w 6
     python respaldar_media.py --originales         # WordPress: baja la imagen sin -300x200
     python respaldar_media.py --paginar --prueba   # recorre ?p=1,2,3... y solo lista (sin descargar)
-    python respaldar_media.py --paginar --patron-grid /s/
+    python respaldar_media.py --paginar --sitio "midominio.com/s/"
     python respaldar_media.py --paginar --selector-detalle "img#foto"   # señalar la imagen grande exacta
     python respaldar_media.py --fuente pagina.html     # código fuente guardado (como pegarlo en JDownloader)
     python respaldar_media.py --fuente carpeta_html/ --base-url https://tusitio.com
@@ -39,6 +39,17 @@ import requests
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+# ======================= CONFIGURACIÓN =======================
+# SITIO: filtro para localizar las páginas de detalle que hay que visitar.
+# Se visitan todas las URLs de la página (con o sin <img>, enlaces o JavaScript) que
+# CONTENGAN este texto. Ejemplos:
+#     SITIO = "/s/"                  -> cualquier URL con /s/ del mismo sitio
+#     SITIO = "midominio.com/s/"     -> solo URLs de ese dominio con /s/
+#     SITIO = ""                     -> (sin filtro) enlaces que traigan miniatura
+# También se puede cambiar al ejecutar:  --sitio "midominio.com/s/"
+SITIO = "/s/"
+# =============================================================
 
 MEDIA_EXT = {
     # imagen
@@ -72,6 +83,14 @@ ATRIBUTOS_SRC = (
 ATRIBUTOS_GRANDES = {
     "data-full", "data-large", "data-large_image", "data-zoom-image",
     "data-orig-file", "data-large-file", "data-full-url", "data-original",
+}
+EXT_NO_MEDIA = {".html", ".htm", ".php", ".asp", ".aspx", ".js", ".css", ".json", ".xml", ".txt"}
+TRACKERS = re.compile(r"(facebook\.com/tr|google-analytics|googletagmanager|doubleclick|/pixel|1x1|spacer\.gif)", re.I)
+CT_EXT = {
+    "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+    "image/gif": ".gif", "image/avif": ".avif", "image/svg+xml": ".svg", "image/bmp": ".bmp",
+    "image/tiff": ".tiff", "video/mp4": ".mp4", "video/webm": ".webm", "audio/mpeg": ".mp3",
+    "audio/ogg": ".ogg", "audio/wav": ".wav", "application/pdf": ".pdf",
 }
 PISTAS_BUENAS = re.compile(r"(main|full|large|big|grande|principal|hero|zoom|original|photo|foto|imagen|image)", re.I)
 PISTAS_MALAS = re.compile(r"(thumb|small|mini|icon|logo|avatar|sprite|banner|placeholder|loader|blank|pixel|emoji|share|related|relacionad)", re.I)
@@ -244,32 +263,61 @@ def extraer_media(html: str, base_url: str, originales: bool, con_texto: bool = 
     return resultado
 
 
-def extraer_grid(html: str, base_url: str, mismo_dominio: bool = True, patron: str = ""):
-    """Encuentra miniaturas que enlazan a OTRA página (típico grid/galería).
-    Si `patron` no está vacío (ej. "/s/"), solo se conservan los enlaces cuya ruta lo contenga.
-    Devuelve ({url_destino: {urls_de_sus_miniaturas}}, total_de_enlaces_con_miniatura)."""
+RE_URL_TEXTO = re.compile(r"(?:https?:)?//[^" + _FIN + r"]+", re.I)
+RE_RUTA_TEXTO = re.compile(r"""["'](/[^\s"'<>\\()]+)["']""")
+
+
+def extraer_enlaces_sitio(html: str, base_url: str, sitio: str, mismo_dominio: bool = True,
+                          originales: bool = False):
+    """Busca las páginas de detalle a visitar: todas las URLs que contengan `sitio`,
+    ya sea en <a href>, en onclick/JavaScript o en cualquier parte del texto, tengan o no <img>.
+    Devuelve ({url: {miniaturas}}, total_de_<a>, muestras_de_enlaces)."""
     soup = BeautifulSoup(html, "html.parser")
-    host = urlparse(base_url).netloc
+    host = urlparse(base_url).netloc.lower().removeprefix("www.")
+    patron = re.sub(r"^https?://", "", (sitio or "").strip().lower())
+    con_dominio = bool(patron) and not patron.startswith("/")
     items: dict[str, set[str]] = {}
-    total = 0
-    for a in soup.find_all("a", href=True):
-        img = a.find("img")
-        if not img:
+    muestras: list[str] = []
+    anchors = soup.find_all("a", href=True)
+
+    def aceptar(crudo: str):
+        crudo = crudo.strip().rstrip(".,;:")
+        if not crudo or crudo.startswith(("#", "javascript:", "mailto:", "tel:", "data:")):
+            return None
+        u = urljoin(base_url, crudo).split("#")[0]
+        if not u.startswith(("http://", "https://")) or extension(u) in MEDIA_EXT:
+            return None
+        if u.rstrip("/") == base_url.rstrip("/"):
+            return None
+        netloc = urlparse(u).netloc.lower().removeprefix("www.")
+        if mismo_dominio and not con_dominio and host and netloc != host:
+            return None
+        return u
+
+    def coincide(u: str) -> bool:
+        return (patron in re.sub(r"^https?://", "", u.lower())) if patron else True
+
+    for a in anchors:
+        u = aceptar(a["href"])
+        if not u:
             continue
-        href = urljoin(base_url, a["href"].strip()).split("#")[0]
-        if not href.startswith(("http://", "https://")):
+        if len(muestras) < 8 and u not in muestras:
+            muestras.append(u)
+        thumbs = extraer_media(str(a), base_url, originales)
+        if patron:
+            if not coincide(u):
+                continue
+        elif not thumbs:
             continue
-        if extension(href) in MEDIA_EXT:  # ya lo cubre extraer_media
-            continue
-        if href.rstrip("/") == base_url.rstrip("/"):
-            continue
-        if mismo_dominio and urlparse(href).netloc != host:
-            continue
-        total += 1
-        if patron and patron not in urlparse(href).path:
-            continue
-        items.setdefault(href, set()).update(extraer_media(str(img), base_url, False))
-    return items, total
+        items.setdefault(u, set()).update(thumbs)
+
+    if patron:  # enlaces fuera de <a>: onclick, JSON, location='...', etc.
+        t = normalizar_texto(html)
+        for cand in [m.group(0) for m in RE_URL_TEXTO.finditer(t)] + [m.group(1) for m in RE_RUTA_TEXTO.finditer(t)]:
+            u = aceptar(cand)
+            if u and coincide(u):
+                items.setdefault(u, set())
+    return items, len(anchors), muestras
 
 
 def _num(v) -> int:
@@ -283,11 +331,16 @@ def puntuar_detalle(html: str, url: str, originales: bool, excluir) -> dict[str,
     soup = BeautifulSoup(html, "html.parser")
     puntos: dict[str, float] = {}
 
-    def sumar(crudo: str, pts: float) -> None:
+    def sumar(crudo: str, pts: float, sin_ext: bool = False) -> None:
         u = urljoin(url, crudo.strip()).split("#")[0]
+        if not u.startswith(("http://", "https://")):
+            return
         if originales:
             u = WP_SIZE.sub("", u)
-        if extension(u) not in MEDIA_EXT or u in excluir:
+        ext = extension(u)
+        if ext not in MEDIA_EXT and not (sin_ext and ext not in EXT_NO_MEDIA):
+            return  # (sin_ext: <img src="/img/123"> sin extensión también cuenta)
+        if u in excluir:
             return
         puntos[u] = puntos.get(u, 0) + pts
 
@@ -311,12 +364,12 @@ def puntuar_detalle(html: str, url: str, originales: bool, excluir) -> dict[str,
             v = el.get(attr)
             if v:
                 extra = 4 if attr in ATRIBUTOS_GRANDES else (2 if attr == "href" else 0)
-                sumar(v, base + extra)
+                sumar(v, base + extra, sin_ext=el.name in ("img", "source", "video") and attr != "href")
         for attr in ("srcset", "data-srcset"):
             if el.get(attr):
                 mejor = mejor_de_srcset(el[attr])
                 if mejor:
-                    sumar(mejor, base + 1)
+                    sumar(mejor, base + 1, sin_ext=el.name in ("img", "source"))
 
     for meta in soup.find_all("meta"):
         prop = (meta.get("property") or meta.get("name") or "").lower()
@@ -330,6 +383,8 @@ def puntuar_detalle(html: str, url: str, originales: bool, excluir) -> dict[str,
     for u in list(puntos):
         if PISTAS_MALAS.search(urlparse(u).path):
             puntos[u] -= 6
+        if TRACKERS.search(u):
+            puntos[u] -= 10
         if WP_SIZE.search(u):
             puntos[u] -= 3
     return puntos
@@ -354,6 +409,14 @@ def media_de_detalle(sesion, url, referer, originales, excluir,
         encontrados: set[str] = set()
         for el in soup.select(selector):
             encontrados |= extraer_media(str(el), url, originales)
+            for sub in [el] + el.find_all(["img", "source", "video"]):
+                if sub.name in ("img", "source", "video"):
+                    for attr in ATRIBUTOS_SRC:
+                        v = sub.get(attr)
+                        if v:
+                            u = urljoin(url, v.strip()).split("#")[0]
+                            if u.startswith(("http://", "https://")) and extension(u) not in EXT_NO_MEDIA:
+                                encontrados.add(WP_SIZE.sub("", u) if originales else u)
         if depurar:
             print(f"   [detalle] {url}\n      selector '{selector}': {sorted(encontrados) or 'SIN COINCIDENCIAS'}")
         return encontrados
@@ -382,13 +445,29 @@ def nombre_archivo(url: str, usados: set[str]) -> str:
 
 
 def descargar(sesion: requests.Session, url: str, destino: Path, referer: str) -> str:
-    """Descarga en streaming. Devuelve 'ok', 'omitido' o 'error: ...'."""
-    if destino.exists() and destino.stat().st_size > 0:
+    """Descarga en streaming. Devuelve 'ok', 'omitido' o 'error: ...'.
+    Si la URL no trae extensión (ej. /img/123), se deduce del Content-Type."""
+    if destino.suffix:
+        if destino.exists() and destino.stat().st_size > 0:
+            return "omitido"
+    elif any(f.stat().st_size > 0 for f in destino.parent.glob(destino.name + ".*")):
         return "omitido"
-    tmp = destino.with_suffix(destino.suffix + ".part")
+    tmp = None
     try:
-        with sesion.get(url, stream=True, timeout=30, headers={"Referer": referer}) as r:
+        headers = {"Referer": referer} if referer else {}
+        with sesion.get(url, stream=True, timeout=30, headers=headers) as r:
             r.raise_for_status()
+            ct = r.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            if ct.startswith("text/html"):
+                return "error: el servidor devolvió una página HTML en vez del archivo (¿protección anti-descarga o login?)"
+            if not destino.suffix:
+                ext = CT_EXT.get(ct)
+                if not ext:
+                    return f"error: no parece un archivo de media (Content-Type: {ct or 'desconocido'})"
+                destino = destino.with_name(destino.name + ext)
+                if destino.exists() and destino.stat().st_size > 0:
+                    return "omitido"
+            tmp = destino.with_suffix(destino.suffix + ".part")
             with open(tmp, "wb") as f:
                 for bloque in r.iter_content(CHUNK):
                     if bloque:
@@ -396,7 +475,7 @@ def descargar(sesion: requests.Session, url: str, destino: Path, referer: str) -
         tmp.replace(destino)
         return "ok"
     except Exception as e:  # noqa: BLE001
-        if tmp.exists():
+        if tmp is not None and tmp.exists():
             tmp.unlink(missing_ok=True)
         return f"error: {e}"
 
@@ -428,18 +507,27 @@ def pagina_inicial(url: str, param: str) -> int | None:
     return None
 
 
-def seguir_grid(sesion, html, url, medios, vistos_enlaces, args, log_errores) -> int:
-    """Entra a los enlaces del grid (que coincidan con --patron-grid) y cambia cada
-    miniatura por la imagen completa. Modifica `medios` en sitio.
+def seguir_grid(sesion, html, url, medios, vistos_enlaces, args, log_errores, referers) -> int:
+    """Visita las páginas que coinciden con SITIO/--sitio y cambia cada miniatura por la
+    imagen grande de la página. Modifica `medios` y `referers` en sitio.
     Devuelve cuántos enlaces nuevos se siguieron."""
-    items, total = extraer_grid(html, url, not args.otros_dominios, args.patron_grid)
+    items, n_a, muestras = extraer_enlaces_sitio(html, url, args.sitio, not args.otros_dominios, args.originales)
     pendientes = {h: t for h, t in items.items() if h not in vistos_enlaces}
     pendientes = dict(list(pendientes.items())[: args.max_enlaces])
-    patron = args.patron_grid or "(todos)"
-    print(f"   grid: {total} enlaces con miniatura | {len(items)} coinciden con {patron} "
+    filtro = args.sitio or "(enlaces con miniatura)"
+    print(f"   enlaces: {n_a} <a> en la página | {len(items)} coinciden con '{filtro}' "
           f"| {len(pendientes)} nuevos por seguir")
+    if not items:
+        print("   Ninguno coincide con el filtro (variable SITIO o --sitio). Ejemplos de enlaces que sí hay en la página:")
+        for m in muestras:
+            print("      ", m)
+        if not muestras:
+            print("       (la página no trae enlaces <a>: puede cargarse con JavaScript; usa --fuente con el código fuente)")
     if not pendientes:
         return 0
+    if args.prueba:
+        for h in list(pendientes)[:3]:
+            print(f"      visitará: {h}")
 
     base_madre = frozenset(medios)
     hallados = 0
@@ -457,24 +545,33 @@ def seguir_grid(sesion, html, url, medios, vistos_enlaces, args, log_errores) ->
                 nuevos = fut.result()
             except Exception as e:  # noqa: BLE001
                 log_errores.append(f"{h}\tGRID\t{e}")
+                print(f"      no pude abrir {h}: {e}")
                 continue
             if nuevos:
                 hallados += 1
                 medios -= pendientes[h]  # cambia la miniatura por la imagen completa
                 medios |= nuevos
+                for u in nuevos:
+                    referers[u] = h  # la imagen se pide con su página /s/... como Referer
             else:
                 log_errores.append(f"{h}\tGRID\tno se encontró imagen grande")
     print(f"   imágenes completas halladas en {hallados} de {len(pendientes)} enlaces")
     return len(pendientes)
 
 
-def descargar_lote(sesion, medios, carpeta, usados, workers, referer, log_errores):
+def descargar_lote(sesion, medios, carpeta, usados, workers, referer, log_errores, referers=None):
+    referers = referers or {}
     ok = omit = err = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         tareas = {}
         for m in sorted(medios):
-            destino = carpeta / nombre_archivo(m, usados)
-            tareas[pool.submit(descargar, sesion, m, destino, referer)] = m
+            ref = referers.get(m, referer)
+            nombre = nombre_archivo(m, usados)
+            if m in referers:  # viene de una página /s/NUMERO: el número ordena y evita choques
+                pref = slug(Path(urlparse(ref).path.rstrip("/")).name, 40)
+                if pref and pref not in nombre:
+                    nombre = f"{pref}_{nombre}"
+            tareas[pool.submit(descargar, sesion, m, carpeta / nombre, ref)] = (m, ref)
         for fut in as_completed(tareas):
             res = fut.result()
             if res == "ok":
@@ -483,7 +580,9 @@ def descargar_lote(sesion, medios, carpeta, usados, workers, referer, log_errore
                 omit += 1
             else:
                 err += 1
-                log_errores.append(f"{tareas[fut]}\t{referer}\t{res}")
+                m, ref = tareas[fut]
+                log_errores.append(f"{m}\t{ref}\t{res}")
+                print(f"      {res}  <- {m}")
     return ok, omit, err
 
 
@@ -527,6 +626,7 @@ def procesar_url(sesion, entrada, base_salida, args, log_errores):
     usados: set[str] = set()
     vistos_medios: set[str] = set()
     vistos_enlaces: set[str] = set()
+    referers: dict[str, str] = {}
     lista_prueba: list[str] = []
     tot_ok = tot_omit = tot_err = 0
     pagina_url = url
@@ -550,9 +650,9 @@ def procesar_url(sesion, entrada, base_salida, args, log_errores):
         else:
             print(f"   [pág {n}] {pagina_url}")
             medios = extraer_media(html, pagina_url, originales)
-            if not args.sin_grid and url:
+            if not args.sin_grid:
                 enlaces_nuevos = seguir_grid(sesion, html, pagina_url, medios,
-                                             vistos_enlaces, args, log_errores)
+                                             vistos_enlaces, args, log_errores, referers)
 
         nuevos_medios = medios - vistos_medios
         extra = ""
@@ -576,7 +676,7 @@ def procesar_url(sesion, entrada, base_salida, args, log_errores):
             lista_prueba.extend(sorted(nuevos_medios))
         else:
             ok, omit, err = descargar_lote(sesion, nuevos_medios, carpeta, usados,
-                                           args.workers, pagina_url, log_errores)
+                                           args.workers, pagina_url, log_errores, referers)
             tot_ok, tot_omit, tot_err = tot_ok + ok, tot_omit + omit, tot_err + err
             print(f"   descargados: {ok} | ya existían: {omit} | errores: {err}")
 
@@ -618,8 +718,9 @@ def main():
     ap.add_argument("--carpeta-url", action="store_true", help="nombrar carpetas con la URL en vez del h1/title")
     ap.add_argument("--sin-grid", action="store_true", help="no seguir los enlaces de las miniaturas del grid")
     ap.add_argument("--max-enlaces", type=int, default=300, help="máximo de enlaces de grid por página (default: 300)")
-    ap.add_argument("--patron-grid", default="/s/",
-                    help='solo seguir enlaces del grid cuya ruta contenga esto (default: "/s/"; usa "" para seguir todos)')
+    ap.add_argument("--sitio", "--patron-grid", dest="sitio", default=SITIO,
+                    help='filtro de las URLs a visitar (default: la variable SITIO del script, "%s"). '
+                         'Ej.: --sitio "midominio.com/s/"' % SITIO)
     ap.add_argument("--paginar", action="store_true", help="recorrer la paginación ?p=1, ?p=2, ... hasta que no haya contenido nuevo")
     ap.add_argument("--param-pagina", default="p", help="nombre del parámetro de paginación (default: p)")
     ap.add_argument("--max-paginas", type=int, default=200, help="tope de páginas por URL (default: 200)")
