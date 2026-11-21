@@ -578,18 +578,8 @@ def puntuar_detalle(html: str, url: str, originales: bool, excluir, sitio: str =
     return puntos, solo_texto
 
 
-def media_de_detalle(sesion, url, referer, originales, excluir, selector="",
-                     solo_principal=False, depurar=False, sitio="") -> set[str]:
-    """Abre la página de detalle (/s/...) y devuelve sus imágenes REALES (todas), sin flechas,
-    íconos, menús ni logos.
-    - selector: selector CSS que señala exactamente las imágenes (ej. "div.visor img").
-    - solo_principal=True: devuelve únicamente la imagen con mayor puntuación."""
-    r = sesion.get(url, timeout=30, headers={"Referer": referer})
-    r.raise_for_status()
-    if "html" not in r.headers.get("Content-Type", "html"):
-        return set()
-    html = html_de(r)
-
+def _imagenes_de_pagina(html, url, originales, excluir, selector, solo_principal, depurar, sitio) -> set[str]:
+    """Imágenes reales de UNA página de detalle (sin flechas, íconos, menús ni logos)."""
     if selector:
         soup = BeautifulSoup(html, "html.parser")
         encontrados: set[str] = set()
@@ -613,7 +603,7 @@ def media_de_detalle(sesion, url, referer, originales, excluir, selector="",
     if solo_principal:
         elegidas = contenido[:1] or [u for u, pts in orden if pts >= -2][:1]
     else:
-        elegidas = contenido or [u for u, pts in orden if pts > -2]  # galerías hechas con JavaScript: lo hallado en el texto
+        elegidas = contenido or [u for u, pts in orden if pts > -2]  # galerías hechas con JavaScript
         if not elegidas:
             elegidas = [u for u, pts in orden if pts >= -2][:1]  # respaldo (URL > URL > imagen)
     if depurar:
@@ -625,6 +615,44 @@ def media_de_detalle(sesion, url, referer, originales, excluir, selector="",
     if len(elegidas) == 1:  # si es la única y falla (HTML), se prueban estas alternativas
         ALTERNATIVAS[elegidas[0]] = [u for u, pts in orden if u != elegidas[0] and pts > -6][:5]
     return set(elegidas)
+
+
+def media_de_detalle(sesion, url, referer, originales, excluir, selector="",
+                     solo_principal=False, depurar=False, sitio="", max_paginas=1, param="p") -> set[str]:
+    """Abre la página de detalle (/s/...) y devuelve sus imágenes REALES (todas). Si debajo hay
+    flechas de paginación del mismo conjunto de imágenes (siguiente página), las sigue y suma las
+    imágenes de cada página (hasta `max_paginas`).
+    - selector: selector CSS que señala exactamente las imágenes (ej. "div.visor img").
+    - solo_principal=True: solo la imagen con mayor puntuación de la primera página."""
+    acumuladas: set[str] = set()
+    vistas = {url}
+    actual, ref = url, referer
+    for k in range(max(1, max_paginas)):
+        try:
+            r = sesion.get(actual, timeout=30, headers={"Referer": ref})
+            r.raise_for_status()
+        except Exception:  # noqa: BLE001
+            if k == 0:
+                raise
+            break  # falló una página posterior: se conserva lo ya reunido
+        if "html" not in r.headers.get("Content-Type", "html"):
+            break
+        html = html_de(r)
+        imgs = _imagenes_de_pagina(html, actual, originales, frozenset(excluir) | acumuladas,
+                                   selector, solo_principal, depurar and k == 0, sitio)
+        if k > 0 and not (imgs - acumuladas):
+            break
+        acumuladas |= imgs
+        if solo_principal:
+            break
+        sig = encontrar_siguiente(html, actual, param, sitio, solo_mismo_item=True)
+        if not sig or sig in vistas:
+            break
+        if depurar:
+            print(f"      paginación dentro de la página -> {sig}")
+        vistas.add(sig)
+        ref, actual = actual, sig
+    return acumuladas
 
 
 def nombre_archivo(url: str, usados: set[str]) -> str:
@@ -782,12 +810,105 @@ def usar_ytdlp(url: str, carpeta: Path) -> None:
     )
 
 
-def url_con_pagina(url: str, param: str, n: int) -> str:
-    """Devuelve la URL con ?param=n (reemplaza el valor si ya existía)."""
+PARAMS_PAGINA = ("p", "page", "pagina", "paged", "pg", "pag")
+RE_SIG = re.compile(r"(?<![a-z])(next|siguiente|sig|right|derecha|der|forward|adelante)(?![a-z])|[»›→]|>>", re.I)
+RE_ANT = re.compile(r"(?<![a-z])(prev|previous|anterior|ant|left|izq|izquierda|back|atras)(?![a-z])|[«‹←]|<<", re.I)
+
+
+def numero_pagina(url: str, params):
+    """(número, estilo) si la URL lleva número de página (?p=2 -> 'q'; /page/2/ -> 'ruta')."""
+    pu = urlparse(url)
+    for k, v in parse_qsl(pu.query):
+        if k in params and v.isdigit():
+            return int(v), "q"
+    m = re.search(r"/(?:page|pagina|p)/(\d+)/?$", pu.path)
+    return (int(m.group(1)), "ruta") if m else (None, "")
+
+
+def encontrar_siguiente(html: str, url: str, param: str = "p", sitio: str = "", solo_mismo_item: bool = False):
+    """Busca el enlace a la SIGUIENTE página de paginación.
+    Prioridad: rel="next"  >  enlace al número de página n+1  >  flecha/botón "siguiente".
+    - Listado: ignora enlaces a páginas de detalle (los cubre el listado en sí).
+    - solo_mismo_item=True (dentro de una página /s/...): solo acepta enlaces del mismo conjunto
+      de imágenes (misma ruta o subruta), nunca saltos a otro /s/ distinto."""
+    soup = BeautifulSoup(html, "html.parser")
+    params = tuple(dict.fromkeys((param,) + PARAMS_PAGINA))
+    patron = re.sub(r"^https?://", "", (sitio or "").strip().lower())
+    pu = urlparse(url)
+    host = pu.netloc.lower().removeprefix("www.")
+    ruta = pu.path.rstrip("/")
+    actual = numero_pagina(url, params)[0] or 1
+
+    def limpio(href):
+        if not href or href.strip().startswith(("#", "javascript:", "mailto:", "tel:", "data:")):
+            return None
+        u = urljoin(url, href.strip()).split("#")[0]
+        pr = urlparse(u)
+        if pr.scheme not in ("http", "https") or pr.netloc.lower().removeprefix("www.") != host:
+            return None
+        if u == url or extension(u) in MEDIA_EXT:
+            return None
+        r = pr.path.rstrip("/")
+        if solo_mismo_item:
+            if not (r == ruta or r.startswith(ruta + "/")):
+                return None
+        elif patron and patron in re.sub(r"^https?://", "", u.lower()):
+            return None  # página de detalle, no de paginación
+        return u
+
+    for el in soup.find_all(["link", "a"], rel=True):  # 1) rel="next"
+        if "next" in [x.lower() for x in (el.get("rel") or [])]:
+            u = limpio(el.get("href"))
+            if u:
+                return u
+    anchors = soup.find_all("a", href=True)
+    for a in anchors:  # 2) enlace al número de página siguiente
+        u = limpio(a["href"])
+        if not u:
+            continue
+        n, estilo = numero_pagina(u, params)
+        if n == actual + 1 and (estilo == "ruta" or urlparse(u).path.rstrip("/") == ruta):
+            return u
+    for a in anchors:  # 3) flecha o botón "siguiente"
+        u = limpio(a["href"])
+        if not u:
+            continue
+        texto = " ".join([a.get_text(" ", strip=True), " ".join(a.get("class", [])), a.get("id") or "",
+                          a.get("title") or "", a.get("aria-label") or ""])
+        for im in a.find_all("img"):
+            texto += " " + (im.get("alt") or "") + " " + urlparse(im.get("src") or "").path
+        if RE_SIG.search(texto) and not RE_ANT.search(texto):
+            return u
+    return None
+
+
+def url_con_pagina(url: str, param: str, n: int, barra=None) -> str:
+    """Devuelve la URL con ?param=n (reemplaza el valor si ya existía).
+    barra=True fuerza la barra final en la ruta (/g/123/456/?p=2); False la quita; None la deja igual."""
     p = urlparse(url)
     q = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if k != param]
     q.append((param, str(n)))
-    return urlunparse(p._replace(query=urlencode(q)))
+    ruta = p.path or "/"
+    if barra is not None and "." not in ruta.rstrip("/").rsplit("/", 1)[-1]:  # no tocar rutas de archivo
+        ruta = (ruta.rstrip("/") + "/") if barra else (ruta.rstrip("/") or "/")
+    return urlunparse(p._replace(path=ruta, query=urlencode(q)))
+
+
+def muestras_paginacion(html: str, url: str, maximo: int = 6) -> list[str]:
+    """Enlaces de la página que parecen de paginación (números, siguiente/anterior, ?p=N)."""
+    soup = BeautifulSoup(html, "html.parser")
+    out: list[str] = []
+    for a in soup.find_all("a", href=True):
+        t = a.get_text(" ", strip=True)
+        h = a["href"]
+        if (re.fullmatch(r"\d{1,3}", t) or RE_SIG.search(t) or RE_ANT.search(t)
+                or re.search(r"[?&/](p|page|pagina|paged|pg)[=/]\d+", h, re.I)):
+            u = urljoin(url, h)
+            if u not in out:
+                out.append(u)
+        if len(out) >= maximo:
+            break
+    return out
 
 
 def pagina_inicial(url: str, param: str) -> int | None:
@@ -825,7 +946,8 @@ def seguir_grid(sesion, html, url, medios, vistos_enlaces, args, log_errores, re
         futs = {
             pool.submit(media_de_detalle, sesion, h, url, args.originales, base_madre,
                         args.selector_detalle, args.solo_principal,
-                        args.prueba and i < 5, args.sitio): h
+                        args.prueba and i < 5, args.sitio,
+                        1 if args.sin_flechas else args.max_paginas_detalle, args.param_pagina): h
             for i, h in enumerate(pendientes)
         }
         for fut in as_completed(futs):
@@ -916,9 +1038,8 @@ def procesar_url(sesion, entrada, base_salida, args, log_errores):
         url = entrada
 
     directo = bool(url) and extension(url) in MEDIA_EXT
-    paginar = args.paginar and bool(url)
-    inicio = pagina_inicial(url, args.param_pagina) if paginar else None
-    n = inicio or 1
+    paginar = (not args.sin_paginar) and bool(url) and not directo  # la paginación se detecta sola
+    forzar = not args.sin_paginar  # sin enlace 'siguiente' visible, se prueba solo ?p=2, ?p=3... (/g/123/456/?p=2)
 
     if html is None:
         try:
@@ -940,31 +1061,44 @@ def procesar_url(sesion, entrada, base_salida, args, log_errores):
 
     usados: set[str] = set()
     vistos_medios: set[str] = set()
+    vistos_crudos: set[str] = set()  # media tal como viene en cada página (antes de cambiar miniaturas)
     vistos_enlaces: set[str] = set()
+    paginas_vistas: set[str] = {url}
     referers: dict[str, str] = {}
     lista_prueba: list[str] = []
     tot_ok = tot_omit = tot_err = tot_desc = 0
     pagina_url = url
     primera = True
     paginas_hechas = 0
+    con_contenido = 0
+    sig_alt = None
+    html_primera = html
 
     while True:
+        num = paginas_hechas + 1
         if not primera:
-            pagina_url = url_con_pagina(url, args.param_pagina, n)
-            try:
-                r = sesion.get(pagina_url, timeout=30)
-                r.raise_for_status()
-                html = html_de(r)
-            except Exception as e:  # noqa: BLE001
-                print(f"   [pág {n}] fin de paginación ({e})")
+            html, ultimo_error = None, None
+            for intento in [pagina_url] + ([sig_alt] if sig_alt else []):  # con barra final y, si falla, sin ella
+                try:
+                    r = sesion.get(intento, timeout=30)
+                    r.raise_for_status()
+                    html, pagina_url = html_de(r), intento
+                    break
+                except Exception as e:  # noqa: BLE001
+                    ultimo_error = e
+            sig_alt = None
+            if html is None:
+                print(f"   [pág {num}] fin de paginación ({describir_error(ultimo_error)})")
                 break
 
         enlaces_nuevos = 0
         if directo:
             medios = {url}
+            crudos = {url}
         else:
-            print(f"   [pág {n}] {pagina_url}")
+            print(f"   [pág {num}] {pagina_url}")
             medios = extraer_media(html, pagina_url, originales)
+            crudos = set(medios)
             if not args.sin_grid:
                 enlaces_nuevos = seguir_grid(sesion, html, pagina_url, medios,
                                              vistos_enlaces, args, log_errores, referers)
@@ -974,17 +1108,19 @@ def procesar_url(sesion, entrada, base_salida, args, log_errores):
         if primera and not directo:
             solo_texto = len(extraer_urls_texto(html, pagina_url, originales) - extraer_media_estructura(html, pagina_url, originales))
             extra = f" (HTML {len(html) // 1024} KB; {solo_texto} hallados solo en texto crudo)"
-        print(f"   [pág {n}] {len(medios)} archivos media, {len(nuevos_medios)} nuevos{extra}")
+        print(f"   [pág {num}] {len(medios)} archivos media, {len(nuevos_medios)} nuevos{extra}")
         paginas_hechas += 1
 
-        if not nuevos_medios and enlaces_nuevos == 0:
+        if not (crudos - vistos_crudos) and enlaces_nuevos == 0:  # página vacía o repetida (el sitio ignoró ?p=N)
             if primera and not medios:
                 print("   AVISO: 0 archivos media. Causas probables: la página los carga con JavaScript o el "
                       "sitio bloquea scripts.\n   Abre la página en tu navegador, copia el código fuente "
                       "(F12 > clic derecho en <html> > Copy > Copy outerHTML) a un .html y usa --fuente archivo.html")
             if not primera:
-                print(f"   [pág {n}] sin contenido nuevo: fin de paginación")
+                print(f"   [pág {num}] sin contenido nuevo: fin de paginación")
             break
+        con_contenido += 1
+        vistos_crudos |= crudos
         vistos_medios |= medios
 
         if args.prueba:
@@ -996,19 +1132,42 @@ def procesar_url(sesion, entrada, base_salida, args, log_errores):
             print(f"   descargados: {ok} | ya existían: {omit} | errores: {err}"
                   + (f" | descartados por muy pequeños: {desc}" if desc else ""))
 
-        if directo or not paginar:
+        if not paginar:
             break
         if paginas_hechas >= args.max_paginas:
             print(f"   límite de {args.max_paginas} páginas alcanzado (--max-paginas)")
             break
-        n += 1
+        sig = encontrar_siguiente(html, pagina_url, args.param_pagina, args.sitio)
+        como = "enlace 'siguiente'"
+        if not sig and forzar:
+            n_actual = numero_pagina(pagina_url, (args.param_pagina,))[0] or paginas_hechas
+            sig = url_con_pagina(url, args.param_pagina, n_actual + 1, barra=True)  # /g/123/456/?p=2
+            alt = url_con_pagina(url, args.param_pagina, n_actual + 1, barra=False)
+            sig_alt = alt if alt != sig else None
+            como = f"?{args.param_pagina}={n_actual + 1} (no hay enlace visible)"
+        if not sig or sig in paginas_vistas:
+            break
+        paginas_vistas.add(sig)
+        if sig_alt:
+            paginas_vistas.add(sig_alt)
+        print(f"   paginación: siguiente página por {como} -> {sig}")
+        pagina_url = sig
         primera = False
 
+    if con_contenido == 1 and paginar and not directo:
+        ej = muestras_paginacion(html_primera, url)
+        if ej:
+            print("   Solo se encontró 1 página con contenido, pero la página trae enlaces que parecen de paginación:")
+            for e_ in ej:
+                print("      ", e_)
+            print("   Si debían seguirse y no se siguieron, mándame cómo se ve ese enlace.")
+        else:
+            print("   (1 sola página con contenido)")
     if args.prueba:
         (carpeta / "lista_prueba.txt").write_text("\n".join(lista_prueba), encoding="utf-8")
         print(f"   PRUEBA: {len(lista_prueba)} archivos se descargarían -> {carpeta / 'lista_prueba.txt'}")
-    elif paginar:
-        print(f"   TOTAL {paginas_hechas} páginas | descargados: {tot_ok} | "
+    elif con_contenido > 1:
+        print(f"   TOTAL {con_contenido} páginas con contenido | descargados: {tot_ok} | "
               f"ya existían: {tot_omit} | errores: {tot_err}")
 
     if args.ytdlp and not args.prueba:
@@ -1037,7 +1196,13 @@ def main():
     ap.add_argument("--sitio", "--patron-grid", dest="sitio", default=SITIO,
                     help='filtro de las URLs a visitar (default: la variable SITIO del script, "%s"). '
                          'Ej.: --sitio "midominio.com/s/"' % SITIO)
-    ap.add_argument("--paginar", action="store_true", help="recorrer la paginación ?p=1, ?p=2, ... hasta que no haya contenido nuevo")
+    ap.add_argument("--paginar", action="store_true",
+                    help="(ya es automático; se conserva por compatibilidad) la paginación se detecta sola y, si no hay enlaces, prueba ?p=2, ?p=3...")
+    ap.add_argument("--sin-paginar", action="store_true", help="no recorrer las páginas siguientes del listado")
+    ap.add_argument("--sin-flechas", action="store_true",
+                    help="no seguir la paginación (flechas 'siguiente') dentro de cada página /s/...")
+    ap.add_argument("--max-paginas-detalle", type=int, default=30,
+                    help="tope de páginas por cada /s/... (default: 30)")
     ap.add_argument("--param-pagina", default="p", help="nombre del parámetro de paginación (default: p)")
     ap.add_argument("--max-paginas", type=int, default=200, help="tope de páginas por URL (default: 200)")
     ap.add_argument("--prueba", action="store_true", help="no descarga: solo lista lo que descargaría (lista_prueba.txt)")
