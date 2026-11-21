@@ -14,6 +14,7 @@ Uso:
     python respaldar_media.py --originales         # WordPress: baja la imagen sin -300x200
     python respaldar_media.py --paginar --prueba   # recorre ?p=1,2,3... y solo lista (sin descargar)
     python respaldar_media.py --paginar --patron-grid /s/
+    python respaldar_media.py --paginar --selector-detalle "img#foto"   # señalar la imagen grande exacta
     python respaldar_media.py --ytdlp              # además intenta videos de YouTube/Vimeo/etc.
                                                    # (requiere: pip install yt-dlp)
 
@@ -56,6 +57,19 @@ HEADERS = {
 
 CHUNK = 256 * 1024  # 256 KB: se escribe a disco por partes, RAM mínima
 WP_SIZE = re.compile(r"-\d{2,4}x\d{2,4}(?=\.[a-zA-Z0-9]+$)")
+
+ATRIBUTOS_SRC = (
+    "src", "data-src", "data-lazy-src", "data-original", "poster", "data-full-url",
+    "data-full", "data-large", "data-large_image", "data-zoom-image",
+    "data-orig-file", "data-large-file", "data-image", "data-bg",
+)
+# atributos que suelen apuntar a la versión grande
+ATRIBUTOS_GRANDES = {
+    "data-full", "data-large", "data-large_image", "data-zoom-image",
+    "data-orig-file", "data-large-file", "data-full-url", "data-original",
+}
+PISTAS_BUENAS = re.compile(r"(main|full|large|big|grande|principal|hero|zoom|original|photo|foto|imagen|image)", re.I)
+PISTAS_MALAS = re.compile(r"(thumb|small|mini|icon|logo|avatar|sprite|banner|placeholder|loader|blank|pixel|emoji|share|related|relacionad)", re.I)
 
 
 def crear_sesion() -> requests.Session:
@@ -130,13 +144,8 @@ def extraer_media(html: str, base_url: str, originales: bool) -> set[str]:
     soup = BeautifulSoup(html, "html.parser")
     candidatos: set[str] = set()
 
-    atributos_src = (
-        "src", "data-src", "data-lazy-src", "data-original", "poster", "data-full-url",
-        "data-full", "data-large", "data-large_image", "data-zoom-image",
-        "data-orig-file", "data-large-file", "data-image", "data-bg",
-    )
     for tag in soup.find_all(["img", "video", "audio", "source", "embed", "track"]):
-        for attr in atributos_src:
+        for attr in ATRIBUTOS_SRC:
             if tag.get(attr):
                 candidatos.add(tag[attr])
         for attr in ("srcset", "data-srcset", "data-lazy-srcset"):
@@ -199,29 +208,101 @@ def extraer_grid(html: str, base_url: str, mismo_dominio: bool = True, patron: s
     return items, total
 
 
-def media_de_detalle(sesion, url, referer, originales, excluir) -> set[str]:
-    """Abre la página de detalle de un item del grid y saca su media principal.
-    Toma el media que NO estaba ya en la página madre (así se descartan logos, menús
-    y miniaturas repetidas); si no queda nada, usa og:image/og:video como respaldo."""
+def _num(v) -> int:
+    m = re.match(r"\d+", str(v or ""))
+    return int(m.group()) if m else 0
+
+
+def puntuar_detalle(html: str, url: str, originales: bool, excluir) -> dict[str, float]:
+    """Asigna una puntuación a cada archivo media de la página de detalle para
+    adivinar cuál es la imagen principal (la grande)."""
+    soup = BeautifulSoup(html, "html.parser")
+    puntos: dict[str, float] = {}
+
+    def sumar(crudo: str, pts: float) -> None:
+        u = urljoin(url, crudo.strip()).split("#")[0]
+        if originales:
+            u = WP_SIZE.sub("", u)
+        if extension(u) not in MEDIA_EXT or u in excluir:
+            return
+        puntos[u] = puntos.get(u, 0) + pts
+
+    for el in soup.find_all(["img", "source", "video", "a"]):
+        base = 0.0
+        pista = " ".join(el.get("class", [])) + " " + (el.get("id") or "")
+        if PISTAS_BUENAS.search(pista):
+            base += 3
+        if PISTAS_MALAS.search(pista):
+            base -= 6
+        if el.find_parent(["main", "article"]):
+            base += 2
+        if el.find_parent(["header", "footer", "nav", "aside"]):
+            base -= 4
+        ancho = _num(el.get("width"))
+        base += min(ancho * _num(el.get("height")) / 50000, 6)
+        if 0 < ancho < 120:
+            base -= 3
+
+        for attr in ATRIBUTOS_SRC + (("href",) if el.name == "a" else ()):
+            v = el.get(attr)
+            if v:
+                extra = 4 if attr in ATRIBUTOS_GRANDES else (2 if attr == "href" else 0)
+                sumar(v, base + extra)
+        for attr in ("srcset", "data-srcset"):
+            if el.get(attr):
+                mejor = mejor_de_srcset(el[attr])
+                if mejor:
+                    sumar(mejor, base + 1)
+
+    for meta in soup.find_all("meta"):
+        prop = (meta.get("property") or meta.get("name") or "").lower()
+        if prop in {"og:image", "og:image:url", "og:video", "og:video:url", "twitter:image"}:
+            if meta.get("content"):
+                sumar(meta["content"], 4)
+
+    for u in list(puntos):
+        if PISTAS_MALAS.search(urlparse(u).path):
+            puntos[u] -= 6
+        if WP_SIZE.search(u):
+            puntos[u] -= 3
+    return puntos
+
+
+def media_de_detalle(sesion, url, referer, originales, excluir,
+                     selector="", todas=False, depurar=False) -> set[str]:
+    """Abre la página de detalle (/s/...) y devuelve su imagen principal.
+    - selector: selector CSS que señala la imagen exacta (ej. "img#foto-grande").
+    - sin selector: elige la imagen con mayor puntuación (grande, en <main>, atributos
+      data-full, og:image, sin sufijo -300x200...), ignorando lo que ya estaba en la
+      página madre (logos, menús, miniaturas).
+    - todas=True: devuelve todo lo nuevo en vez de solo la principal."""
     r = sesion.get(url, timeout=30, headers={"Referer": referer})
     r.raise_for_status()
     if "html" not in r.headers.get("Content-Type", "html"):
         return set()
     html = html_de(r)
 
-    soup = BeautifulSoup(html, "html.parser")
-    og: set[str] = set()
-    for meta in soup.find_all("meta"):
-        prop = (meta.get("property") or meta.get("name") or "").lower()
-        if prop in {"og:image", "og:image:url", "og:video", "og:video:url", "twitter:image"}:
-            if meta.get("content"):
-                absoluta = urljoin(url, meta["content"].strip()).split("#")[0]
-                if extension(absoluta) in MEDIA_EXT:
-                    og.add(WP_SIZE.sub("", absoluta) if originales else absoluta)
+    if selector:
+        soup = BeautifulSoup(html, "html.parser")
+        encontrados: set[str] = set()
+        for el in soup.select(selector):
+            encontrados |= extraer_media(str(el), url, originales)
+        if depurar:
+            print(f"   [detalle] {url}\n      selector '{selector}': {sorted(encontrados) or 'SIN COINCIDENCIAS'}")
+        return encontrados
 
-    todos = extraer_media(html, url, originales)
-    nuevos = todos - excluir
-    return nuevos or og
+    puntos = puntuar_detalle(html, url, originales, excluir)
+    if depurar:
+        print(f"   [detalle] {url}")
+        for u, pts in sorted(puntos.items(), key=lambda kv: -kv[1])[:3]:
+            print(f"      {pts:5.1f}  {u}")
+        if not puntos:
+            print("      (sin candidatos)")
+    if not puntos:
+        return set()
+    if todas:
+        return set(puntos)
+    return {max(puntos, key=puntos.get)}
 
 
 def nombre_archivo(url: str, usados: set[str]) -> str:
@@ -297,8 +378,10 @@ def seguir_grid(sesion, html, url, medios, vistos_enlaces, args, log_errores) ->
     hallados = 0
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futs = {
-            pool.submit(media_de_detalle, sesion, h, url, args.originales, base_madre): h
-            for h in pendientes
+            pool.submit(media_de_detalle, sesion, h, url, args.originales, base_madre,
+                        args.selector_detalle, args.todas_detalle,
+                        args.prueba and i < 5): h
+            for i, h in enumerate(pendientes)
         }
         for fut in as_completed(futs):
             h = futs[fut]
@@ -312,6 +395,8 @@ def seguir_grid(sesion, html, url, medios, vistos_enlaces, args, log_errores) ->
                 hallados += 1
                 medios -= pendientes[h]  # cambia la miniatura por la imagen completa
                 medios |= nuevos
+            else:
+                log_errores.append(f"{h}\tGRID\tno se encontró imagen grande")
     print(f"   imágenes completas halladas en {hallados} de {len(pendientes)} enlaces")
     return len(pendientes)
 
@@ -449,6 +534,10 @@ def main():
     ap.add_argument("--param-pagina", default="p", help="nombre del parámetro de paginación (default: p)")
     ap.add_argument("--max-paginas", type=int, default=200, help="tope de páginas por URL (default: 200)")
     ap.add_argument("--prueba", action="store_true", help="no descarga: solo lista lo que descargaría (lista_prueba.txt)")
+    ap.add_argument("--selector-detalle", default="",
+                    help='selector CSS de la imagen grande en la página /s/... (ej. "img#foto" o "div.visor img")')
+    ap.add_argument("--todas-detalle", action="store_true",
+                    help="en la página /s/... bajar todo el media nuevo, no solo la imagen principal")
     ap.add_argument("--otros-dominios", action="store_true", help="seguir también enlaces de grid hacia otros dominios")
     args = ap.parse_args()
 
