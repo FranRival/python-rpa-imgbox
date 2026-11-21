@@ -17,6 +17,8 @@ Uso:
     python respaldar_media.py --paginar --selector-detalle "img#foto"   # señalar la imagen grande exacta
     python respaldar_media.py --fuente pagina.html     # código fuente guardado (como pegarlo en JDownloader)
     python respaldar_media.py --fuente carpeta_html/ --base-url https://tusitio.com
+    python respaldar_media.py --diagnostico URL_IMAGEN --pagina URL_PAGINA   # ¿qué protección hay?
+    python respaldar_media.py --cabeceras-archivo cabeceras.txt            # usar las cabeceras de tu navegador
     python respaldar_media.py --ytdlp              # además intenta videos de YouTube/Vimeo/etc.
                                                    # (requiere: pip install yt-dlp)
 
@@ -94,6 +96,135 @@ CT_EXT = {
 }
 PISTAS_BUENAS = re.compile(r"(main|full|large|big|grande|principal|hero|zoom|original|photo|foto|imagen|image)", re.I)
 PISTAS_MALAS = re.compile(r"(thumb|small|mini|icon|logo|avatar|sprite|banner|placeholder|loader|blank|pixel|emoji|share|related|relacionad)", re.I)
+
+
+REFERER_FIJO = ""  # se llena con --referer
+
+
+def describir_error(e: Exception) -> str:
+    """Convierte un error de requests en un mensaje con la causa probable."""
+    resp = getattr(e, "response", None)
+    if isinstance(e, requests.HTTPError) and resp is not None:
+        c = resp.status_code
+        server = resp.headers.get("Server", "")
+        extra = f" (servidor: {server})" if server else ""
+        pistas = {
+            401: "requiere autenticación (cookie de sesión o cabecera Authorization): usa --cabeceras-archivo o --cookie",
+            403: "acceso denegado: suele ser Referer/anti-hotlink, cookie o protección tipo Cloudflare. "
+                 "Prueba: --diagnostico URL_DE_LA_IMAGEN",
+            404: "esa URL no existe",
+            429: "demasiadas peticiones: baja las descargas simultáneas con -w 1",
+        }
+        return f"HTTP {c}{extra}: {pistas.get(c, 'respuesta inesperada')}"
+    return str(e)
+
+
+def leer_cabeceras(ruta: Path) -> dict[str, str]:
+    """Lee cabeceras desde un archivo: acepta un comando "Copy as cURL (bash)" pegado tal cual
+    o líneas "Nombre: valor"."""
+    texto = ruta.read_text(encoding="utf-8", errors="ignore").replace("\\\n", " ")
+    cab: dict[str, str] = {}
+    for m in re.finditer(r"""(?:-H|--header)\s+(['"])(.*?)\1""", texto, re.S):
+        nombre, _, valor = m.group(2).partition(":")
+        if nombre.strip():
+            cab[nombre.strip()] = valor.strip()
+    for m in re.finditer(r"""(?:-b|--cookie)\s+(['"])(.*?)\1""", texto, re.S):
+        cab["Cookie"] = m.group(2).strip()
+    if not cab:  # formato línea por línea
+        for linea in texto.splitlines():
+            n, _, v = linea.partition(":")
+            if re.fullmatch(r"[A-Za-z][A-Za-z0-9\-]*", n.strip()) and not linea.lstrip().startswith("curl"):
+                cab[n.strip()] = v.strip()
+    # estas rompen requests (br/zstd no se decodifican, 304, host propio...) o se manejan aparte
+    prohibidas = {"host", "content-length", "accept-encoding", "connection", "if-none-match",
+                  "if-modified-since", "referer", "range"}
+    return {k: v for k, v in cab.items() if k.lower() not in prohibidas and not k.startswith(":")}
+
+
+def configurar_sesion(sesion: requests.Session, args) -> None:
+    global REFERER_FIJO
+    REFERER_FIJO = args.referer or ""
+    if args.user_agent:
+        sesion.headers["User-Agent"] = args.user_agent
+    if args.cabeceras_archivo:
+        ruta = Path(args.cabeceras_archivo).expanduser()
+        if ruta.is_file():
+            cab = leer_cabeceras(ruta)
+            sesion.headers.update(cab)
+            print(f"Cabeceras importadas de {ruta.name}: {', '.join(sorted(cab)) or '(ninguna)'}")
+        else:
+            print(f"(no existe {ruta}, no se importan cabeceras)")
+    for h in args.header or []:
+        n, _, v = h.partition(":")
+        if n.strip():
+            sesion.headers[n.strip()] = v.strip()
+    if args.cookie:
+        sesion.headers["Cookie"] = args.cookie
+
+
+def diagnostico(sesion: requests.Session, url_img: str, url_pagina: str = "") -> None:
+    """Prueba la descarga de UNA imagen con distintas cabeceras y dice qué protección hay."""
+    p = urlparse(url_img)
+    raiz = f"{p.scheme}://{p.netloc}/"
+    print(f"DIAGNÓSTICO\n  imagen: {url_img}")
+    if url_pagina:
+        try:
+            r = sesion.get(url_pagina, timeout=30)
+            bajo = r.text.lower()
+            reto = any(m in bajo for m in ("just a moment", "cf-chl", "attention required",
+                                           "cf-browser-verification", "captcha"))
+            print(f"  página: HTTP {r.status_code} | {len(r.content) // 1024} KB | servidor={r.headers.get('Server', '?')}"
+                  + ("  <- parece una pantalla de verificación (Cloudflare/captcha)" if reto else ""))
+        except Exception as e:  # noqa: BLE001
+            print(f"  página: ERROR {describir_error(e)}")
+
+    ref = url_pagina or raiz
+    pruebas = [("Sin Referer", {})]
+    if url_pagina:
+        pruebas.append(("Referer = la página del sitio", {"Referer": url_pagina}))
+    pruebas.append(("Referer = raíz del sitio", {"Referer": raiz}))
+    pruebas.append(("Referer + cabeceras de navegador", {
+        "Referer": ref, "Sec-Fetch-Dest": "image", "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Site": "same-origin",
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"}))
+
+    resultados = []
+    print("  pruebas:")
+    for nombre, h in pruebas:
+        try:
+            r = sesion.get(url_img, stream=True, timeout=30, headers=h)
+            ct = r.headers.get("Content-Type", "?").split(";")[0].strip()
+            extra = " | ".join(f"{k}={r.headers[k]}" for k in
+                               ("Server", "CF-Ray", "cf-mitigated", "WWW-Authenticate") if k in r.headers)
+            print(f"    {nombre:36} -> HTTP {r.status_code} | {ct} | {r.headers.get('Content-Length', '?')} bytes"
+                  + (f" | {extra}" if extra else ""))
+            resultados.append((nombre, r.status_code, ct, r.headers))
+            r.close()
+        except Exception as e:  # noqa: BLE001
+            print(f"    {nombre:36} -> ERROR {e}")
+            resultados.append((nombre, 0, "", {}))
+
+    es_media = lambda ct: ct.startswith(("image/", "video/", "audio/")) or ct in ("application/octet-stream", "application/pdf")
+    buenos = [n for n, st, ct, _ in resultados if st == 200 and es_media(ct)]
+    estados = {st for _, st, _, _ in resultados}
+    cf = any("cf-ray" in {k.lower() for k in hd} for *_, hd in resultados)
+    print("\n  CONCLUSIÓN:")
+    if buenos and buenos[0] == "Sin Referer":
+        print("    Sin protección por cabeceras: la imagen se descarga normal. Si el script falla, revisa errores.txt.")
+    elif buenos:
+        print(f"    Hay protección por Referer: funciona con '{buenos[0]}'. El script ya envía la página como "
+              "Referer; si falla, fuerza uno con --referer https://tusitio.com/")
+    elif 401 in estados:
+        print("    Pide autenticación (401): necesitas la cookie de sesión o la cabecera Authorization de tu navegador.\n"
+              "    Usa --cabeceras-archivo (ver instrucciones) o --cookie.")
+    elif 403 in estados and cf:
+        print("    Cloudflare está bloqueando al script (403). Usa --cabeceras-archivo con las cabeceras y cookies de tu\n"
+              "    navegador (incluida cf_clearance) y el mismo User-Agent.")
+    elif 403 in estados:
+        print("    Acceso denegado (403) sin importar el Referer: probablemente cookie de sesión o User-Agent/cabeceras.\n"
+              "    Usa --cabeceras-archivo con las de tu navegador.")
+    else:
+        print(f"    Estados recibidos: {sorted(estados)}. Revisa que la URL de la imagen sea correcta.")
 
 
 def crear_sesion() -> requests.Session:
@@ -454,7 +585,8 @@ def descargar(sesion: requests.Session, url: str, destino: Path, referer: str) -
         return "omitido"
     tmp = None
     try:
-        headers = {"Referer": referer} if referer else {}
+        ref = REFERER_FIJO or referer
+        headers = {"Referer": ref} if ref else {}
         with sesion.get(url, stream=True, timeout=30, headers=headers) as r:
             r.raise_for_status()
             ct = r.headers.get("Content-Type", "").split(";")[0].strip().lower()
@@ -477,7 +609,7 @@ def descargar(sesion: requests.Session, url: str, destino: Path, referer: str) -
     except Exception as e:  # noqa: BLE001
         if tmp is not None and tmp.exists():
             tmp.unlink(missing_ok=True)
-        return f"error: {e}"
+        return f"error: {describir_error(e)}"
 
 
 def usar_ytdlp(url: str, carpeta: Path) -> None:
@@ -545,7 +677,7 @@ def seguir_grid(sesion, html, url, medios, vistos_enlaces, args, log_errores, re
                 nuevos = fut.result()
             except Exception as e:  # noqa: BLE001
                 log_errores.append(f"{h}\tGRID\t{e}")
-                print(f"      no pude abrir {h}: {e}")
+                print(f"      no pude abrir {h}: {describir_error(e)}")
                 continue
             if nuevos:
                 hallados += 1
@@ -582,7 +714,10 @@ def descargar_lote(sesion, medios, carpeta, usados, workers, referer, log_errore
                 err += 1
                 m, ref = tareas[fut]
                 log_errores.append(f"{m}\t{ref}\t{res}")
-                print(f"      {res}  <- {m}")
+                if err <= 5:
+                    print(f"      {res}  <- {m}")
+    if err > 5:
+        print(f"      ... y {err - 5} errores más (ver errores.txt)")
     return ok, omit, err
 
 
@@ -611,7 +746,7 @@ def procesar_url(sesion, entrada, base_salida, args, log_errores):
             r.raise_for_status()
             html = html_de(r)
         except Exception as e:  # noqa: BLE001
-            print(f"   ERROR al abrir la página: {e}")
+            print(f"   ERROR al abrir la página: {describir_error(e)}")
             print("   (si el sitio bloquea scripts o carga con JavaScript: abre la página en tu navegador,"
                   " copia el código fuente a un .html y usa --fuente archivo.html)")
             log_errores.append(f"{url}\tPAGINA\t{e}")
@@ -733,8 +868,22 @@ def main():
                     help="código fuente guardado (.html) o carpeta con varios; como pegarlo en JDownloader")
     ap.add_argument("--base-url", default="", help="URL original del código fuente (para resolver rutas relativas)")
     ap.add_argument("--cookie", default="", help='cabecera Cookie, ej. "sesion=abc; edad=1" (sitios con login/verificación)')
+    ap.add_argument("--cabeceras-archivo", default="",
+                    help='archivo con las cabeceras de tu navegador (pega ahí un "Copy as cURL (bash)" de una imagen)')
+    ap.add_argument("--header", action="append", metavar='"Nombre: valor"', help="cabecera extra (se puede repetir)")
+    ap.add_argument("--referer", default="", help="forzar este Referer en todas las descargas, ej. https://tusitio.com/")
+    ap.add_argument("--user-agent", default="", help="User-Agent a usar (por defecto uno de Chrome)")
+    ap.add_argument("--diagnostico", metavar="URL_IMAGEN", default="",
+                    help="prueba descargar UNA imagen con distintas cabeceras y explica qué protección hay")
+    ap.add_argument("--pagina", default="", help="con --diagnostico: la página /s/... donde aparece esa imagen")
     ap.add_argument("--otros-dominios", action="store_true", help="seguir también enlaces de grid hacia otros dominios")
     args = ap.parse_args()
+
+    sesion = crear_sesion()
+    configurar_sesion(sesion, args)
+    if args.diagnostico:
+        diagnostico(sesion, args.diagnostico, args.pagina)
+        return
 
     entradas: list[str] = []
     if args.input or not args.fuente:
@@ -755,9 +904,6 @@ def main():
     salida.mkdir(parents=True, exist_ok=True)
     print(f"{len(urls)} URLs -> {salida.resolve()}")
 
-    sesion = crear_sesion()
-    if args.cookie:
-        sesion.headers["Cookie"] = args.cookie
     errores: list[str] = []
     for i, u in enumerate(urls, 1):
         print(f"\n[{i}/{len(urls)}]", end="")
