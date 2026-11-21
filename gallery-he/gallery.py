@@ -15,6 +15,8 @@ Uso:
     python respaldar_media.py --paginar --prueba   # recorre ?p=1,2,3... y solo lista (sin descargar)
     python respaldar_media.py --paginar --patron-grid /s/
     python respaldar_media.py --paginar --selector-detalle "img#foto"   # señalar la imagen grande exacta
+    python respaldar_media.py --fuente pagina.html     # código fuente guardado (como pegarlo en JDownloader)
+    python respaldar_media.py --fuente carpeta_html/ --base-url https://tusitio.com
     python respaldar_media.py --ytdlp              # además intenta videos de YouTube/Vimeo/etc.
                                                    # (requiere: pip install yt-dlp)
 
@@ -29,6 +31,7 @@ import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from html import unescape
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlparse, urlunparse
 
@@ -49,6 +52,8 @@ MEDIA_EXT = {
 }
 
 HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -140,7 +145,62 @@ def mejor_de_srcset(srcset: str) -> str | None:
     return mejor
 
 
-def extraer_media(html: str, base_url: str, originales: bool) -> set[str]:
+_EXT = "|".join(sorted((e[1:] for e in MEDIA_EXT), key=len, reverse=True))
+_FIN = r"""\s"'<>()\\\[\]{}|^`"""  # caracteres que terminan una URL
+RE_ABS = re.compile(
+    r"(?:https?:)?//[^" + _FIN + r"]+?\.(?:" + _EXT + r")(?:\?[^" + _FIN + r"]*)?(?=[" + _FIN + r",;]|$)",
+    re.I,
+)
+RE_REL = re.compile(
+    r"""["'(=]\s*((?:\.{0,2}/)?[^""" + _FIN + r"""]+?\.(?:""" + _EXT + r""")(?:\?[^""" + _FIN + r"""]*)?)(?=["')\s])""",
+    re.I,
+)
+
+
+def normalizar_texto(t: str) -> str:
+    """Deshace escapes típicos de barras, ampersands y comillas para que las URLs queden legibles."""
+    t = t.replace("\\/", "/")
+    t = re.sub(r"\\u002[fF]", "/", t)
+    t = re.sub(r"\\x2[fF]", "/", t)
+    t = re.sub(r"\\u0026", "&", t)
+    return unescape(t)
+
+
+def extraer_urls_texto(texto: str, base_url: str, originales: bool = False) -> set[str]:
+    """Como el capturador de JDownloader: escanea TODO el texto (HTML, CSS, JS, JSON,
+    atributos raros) buscando cualquier URL que termine en una extensión de media."""
+    t = normalizar_texto(texto)
+    crudas = [m.group(0) for m in RE_ABS.finditer(t)] + [m.group(1) for m in RE_REL.finditer(t)]
+    res: set[str] = set()
+    for c in crudas:
+        u = urljoin(base_url, c.strip()).split("#")[0]
+        if not u.startswith(("http://", "https://")) or extension(u) not in MEDIA_EXT:
+            continue
+        res.add(WP_SIZE.sub("", u) if originales else u)
+    return res
+
+
+def inferir_base(html: str) -> str:
+    """URL original de un código fuente guardado (<base>, canonical u og:url)."""
+    soup = BeautifulSoup(html, "html.parser")
+    b = soup.find("base", href=True)
+    if b and b["href"].startswith("http"):
+        return b["href"]
+    c = soup.find("link", rel="canonical", href=True)
+    if c and c["href"].startswith("http"):
+        return c["href"]
+    m = soup.find("meta", attrs={"property": "og:url"})
+    if m and (m.get("content") or "").startswith("http"):
+        return m["content"]
+    return ""
+
+
+def extraer_media_estructura(html: str, base_url: str, originales: bool) -> set[str]:
+    """Solo lo que se ve por etiquetas (para comparar en el diagnóstico)."""
+    return extraer_media(html, base_url, originales, con_texto=False)
+
+
+def extraer_media(html: str, base_url: str, originales: bool, con_texto: bool = True) -> set[str]:
     soup = BeautifulSoup(html, "html.parser")
     candidatos: set[str] = set()
 
@@ -173,10 +233,14 @@ def extraer_media(html: str, base_url: str, originales: bool) -> set[str]:
         if not c or c.startswith(("data:", "javascript:", "#", "mailto:")):
             continue
         absoluta = urljoin(base_url, c).split("#")[0]
+        if not absoluta.startswith(("http://", "https://")):
+            continue
         if extension(absoluta) in MEDIA_EXT:
             if originales:
                 absoluta = WP_SIZE.sub("", absoluta)
             resultado.add(absoluta)
+    if con_texto:
+        resultado |= extraer_urls_texto(html, base_url, originales)
     return resultado
 
 
@@ -259,6 +323,9 @@ def puntuar_detalle(html: str, url: str, originales: bool, excluir) -> dict[str,
         if prop in {"og:image", "og:image:url", "og:video", "og:video:url", "twitter:image"}:
             if meta.get("content"):
                 sumar(meta["content"], 4)
+
+    for u in sorted(extraer_urls_texto(html, url, originales)):
+        sumar(u, 0)
 
     for u in list(puntos):
         if PISTAS_MALAS.search(urlparse(u).path):
@@ -420,23 +487,38 @@ def descargar_lote(sesion, medios, carpeta, usados, workers, referer, log_errore
     return ok, omit, err
 
 
-def procesar_url(sesion, url, base_salida, args, log_errores):
-    print(f"\n==> {url}")
+def procesar_url(sesion, entrada, base_salida, args, log_errores):
+    print(f"\n==> {entrada}")
     originales, usar_titulo = args.originales, not args.carpeta_url
-    directo = extension(url) in MEDIA_EXT
-    inicio = pagina_inicial(url, args.param_pagina) if args.paginar else None
+
+    local = not entrada.startswith(("http://", "https://")) and Path(entrada).expanduser().is_file()
+    html = None
+    if local:
+        html = Path(entrada).expanduser().read_text(encoding="utf-8", errors="ignore")
+        url = args.base_url or inferir_base(html)
+        print(f"   código fuente local | URL base: "
+              f"{url or '(no detectada; para rutas relativas usa --base-url https://tusitio.com)'}")
+    else:
+        url = entrada
+
+    directo = bool(url) and extension(url) in MEDIA_EXT
+    paginar = args.paginar and bool(url)
+    inicio = pagina_inicial(url, args.param_pagina) if paginar else None
     n = inicio or 1
 
-    try:
-        r = sesion.get(url, timeout=30)
-        r.raise_for_status()
-        html = html_de(r)
-    except Exception as e:  # noqa: BLE001
-        print(f"   ERROR al abrir la página: {e}")
-        log_errores.append(f"{url}\tPAGINA\t{e}")
-        return
+    if html is None:
+        try:
+            r = sesion.get(url, timeout=30)
+            r.raise_for_status()
+            html = html_de(r)
+        except Exception as e:  # noqa: BLE001
+            print(f"   ERROR al abrir la página: {e}")
+            print("   (si el sitio bloquea scripts o carga con JavaScript: abre la página en tu navegador,"
+                  " copia el código fuente a un .html y usa --fuente archivo.html)")
+            log_errores.append(f"{url}\tPAGINA\t{e}")
+            return
 
-    carpeta = carpeta_para_pagina(base_salida, url, html, usar_titulo)
+    carpeta = carpeta_para_pagina(base_salida, url or Path(entrada).stem, html, usar_titulo)
     carpeta.mkdir(parents=True, exist_ok=True)
     print(f"   carpeta: {carpeta.name}")
     if not directo:
@@ -468,15 +550,23 @@ def procesar_url(sesion, url, base_salida, args, log_errores):
         else:
             print(f"   [pág {n}] {pagina_url}")
             medios = extraer_media(html, pagina_url, originales)
-            if not args.sin_grid:
+            if not args.sin_grid and url:
                 enlaces_nuevos = seguir_grid(sesion, html, pagina_url, medios,
                                              vistos_enlaces, args, log_errores)
 
         nuevos_medios = medios - vistos_medios
-        print(f"   [pág {n}] {len(medios)} archivos media, {len(nuevos_medios)} nuevos")
+        extra = ""
+        if primera and not directo:
+            solo_texto = len(extraer_urls_texto(html, pagina_url, originales) - extraer_media_estructura(html, pagina_url, originales))
+            extra = f" (HTML {len(html) // 1024} KB; {solo_texto} hallados solo en texto crudo)"
+        print(f"   [pág {n}] {len(medios)} archivos media, {len(nuevos_medios)} nuevos{extra}")
         paginas_hechas += 1
 
         if not nuevos_medios and enlaces_nuevos == 0:
+            if primera and not medios:
+                print("   AVISO: 0 archivos media. Causas probables: la página los carga con JavaScript o el "
+                      "sitio bloquea scripts.\n   Abre la página en tu navegador, copia el código fuente "
+                      "(F12 > clic derecho en <html> > Copy > Copy outerHTML) a un .html y usa --fuente archivo.html")
             if not primera:
                 print(f"   [pág {n}] sin contenido nuevo: fin de paginación")
             break
@@ -490,7 +580,7 @@ def procesar_url(sesion, url, base_salida, args, log_errores):
             tot_ok, tot_omit, tot_err = tot_ok + ok, tot_omit + omit, tot_err + err
             print(f"   descargados: {ok} | ya existían: {omit} | errores: {err}")
 
-        if directo or not args.paginar:
+        if directo or not paginar:
             break
         if paginas_hechas >= args.max_paginas:
             print(f"   límite de {args.max_paginas} páginas alcanzado (--max-paginas)")
@@ -501,7 +591,7 @@ def procesar_url(sesion, url, base_salida, args, log_errores):
     if args.prueba:
         (carpeta / "lista_prueba.txt").write_text("\n".join(lista_prueba), encoding="utf-8")
         print(f"   PRUEBA: {len(lista_prueba)} archivos se descargarían -> {carpeta / 'lista_prueba.txt'}")
-    elif args.paginar:
+    elif paginar:
         print(f"   TOTAL {paginas_hechas} páginas | descargados: {tot_ok} | "
               f"ya existían: {tot_omit} | errores: {tot_err}")
 
@@ -520,7 +610,7 @@ def leer_urls(ruta: Path) -> list[str]:
 
 def main():
     ap = argparse.ArgumentParser(description="Respalda los archivos media de una lista de URLs.")
-    ap.add_argument("-i", "--input", default="urls.txt", help="archivo con URLs (default: urls.txt)")
+    ap.add_argument("-i", "--input", default=None, help="archivo con URLs (default: urls.txt)")
     ap.add_argument("-o", "--output", default="respaldo", help="carpeta de salida (default: respaldo)")
     ap.add_argument("-w", "--workers", type=int, default=4, help="descargas simultáneas por URL (default: 4)")
     ap.add_argument("--originales", action="store_true", help="WordPress: quita sufijo -300x200 para bajar el original")
@@ -538,19 +628,35 @@ def main():
                     help='selector CSS de la imagen grande en la página /s/... (ej. "img#foto" o "div.visor img")')
     ap.add_argument("--todas-detalle", action="store_true",
                     help="en la página /s/... bajar todo el media nuevo, no solo la imagen principal")
+    ap.add_argument("--fuente", nargs="+", metavar="ARCHIVO_O_CARPETA",
+                    help="código fuente guardado (.html) o carpeta con varios; como pegarlo en JDownloader")
+    ap.add_argument("--base-url", default="", help="URL original del código fuente (para resolver rutas relativas)")
+    ap.add_argument("--cookie", default="", help='cabecera Cookie, ej. "sesion=abc; edad=1" (sitios con login/verificación)')
     ap.add_argument("--otros-dominios", action="store_true", help="seguir también enlaces de grid hacia otros dominios")
     args = ap.parse_args()
 
-    ruta = Path(args.input)
-    if not ruta.exists():
-        sys.exit(f"No encuentro {ruta}. Crea el archivo con una URL por línea.")
-
-    urls = leer_urls(ruta)
+    entradas: list[str] = []
+    if args.input or not args.fuente:
+        ruta = Path(args.input or "urls.txt")
+        if not ruta.exists():
+            sys.exit(f"No encuentro {ruta}. Crea el archivo con una URL por línea (o usa --fuente archivo.html).")
+        entradas += leer_urls(ruta)
+    for f in args.fuente or []:
+        pth = Path(f).expanduser()
+        if pth.is_dir():
+            entradas += sorted(str(x) for x in pth.iterdir() if x.suffix.lower() in {".html", ".htm", ".txt"})
+        elif pth.is_file():
+            entradas.append(str(pth))
+        else:
+            print(f"(no existe {f}, se omite)")
+    urls = list(dict.fromkeys(entradas))
     salida = Path(args.output)
     salida.mkdir(parents=True, exist_ok=True)
     print(f"{len(urls)} URLs -> {salida.resolve()}")
 
     sesion = crear_sesion()
+    if args.cookie:
+        sesion.headers["Cookie"] = args.cookie
     errores: list[str] = []
     for i, u in enumerate(urls, 1):
         print(f"\n[{i}/{len(urls)}]", end="")
