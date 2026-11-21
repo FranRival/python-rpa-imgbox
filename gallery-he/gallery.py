@@ -12,6 +12,8 @@ Uso:
     python respaldar_media.py                      # usa urls.txt -> carpeta respaldo/
     python respaldar_media.py -i mis_urls.txt -o D:/respaldo -w 6
     python respaldar_media.py --originales         # WordPress: baja la imagen sin -300x200
+    python respaldar_media.py --paginar --prueba   # recorre ?p=1,2,3... y solo lista (sin descargar)
+    python respaldar_media.py --paginar --patron-grid /s/
     python respaldar_media.py --ytdlp              # además intenta videos de YouTube/Vimeo/etc.
                                                    # (requiere: pip install yt-dlp)
 
@@ -27,7 +29,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from urllib.parse import urljoin, urlparse, unquote
+from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -68,6 +70,14 @@ def crear_sesion() -> requests.Session:
     s.mount("http://", HTTPAdapter(max_retries=retry))
     s.mount("https://", HTTPAdapter(max_retries=retry))
     return s
+
+
+def html_de(r: requests.Response) -> str:
+    """Texto HTML con la codificación correcta (requests asume latin-1 si el servidor
+    no declara charset, lo que rompe acentos y ñ en los títulos)."""
+    if "charset" not in r.headers.get("Content-Type", "").lower():
+        r.encoding = r.apparent_encoding or "utf-8"
+    return r.text
 
 
 def slug(texto: str, maximo: int = 80) -> str:
@@ -161,12 +171,14 @@ def extraer_media(html: str, base_url: str, originales: bool) -> set[str]:
     return resultado
 
 
-def extraer_grid(html: str, base_url: str, mismo_dominio: bool = True) -> dict[str, set[str]]:
+def extraer_grid(html: str, base_url: str, mismo_dominio: bool = True, patron: str = ""):
     """Encuentra miniaturas que enlazan a OTRA página (típico grid/galería).
-    Devuelve {url_de_la_página_destino: {urls_de_sus_miniaturas}}."""
+    Si `patron` no está vacío (ej. "/s/"), solo se conservan los enlaces cuya ruta lo contenga.
+    Devuelve ({url_destino: {urls_de_sus_miniaturas}}, total_de_enlaces_con_miniatura)."""
     soup = BeautifulSoup(html, "html.parser")
     host = urlparse(base_url).netloc
     items: dict[str, set[str]] = {}
+    total = 0
     for a in soup.find_all("a", href=True):
         img = a.find("img")
         if not img:
@@ -180,8 +192,11 @@ def extraer_grid(html: str, base_url: str, mismo_dominio: bool = True) -> dict[s
             continue
         if mismo_dominio and urlparse(href).netloc != host:
             continue
+        total += 1
+        if patron and patron not in urlparse(href).path:
+            continue
         items.setdefault(href, set()).update(extraer_media(str(img), base_url, False))
-    return items
+    return items, total
 
 
 def media_de_detalle(sesion, url, referer, originales, excluir) -> set[str]:
@@ -192,7 +207,7 @@ def media_de_detalle(sesion, url, referer, originales, excluir) -> set[str]:
     r.raise_for_status()
     if "html" not in r.headers.get("Content-Type", "html"):
         return set()
-    html = r.text
+    html = html_de(r)
 
     soup = BeautifulSoup(html, "html.parser")
     og: set[str] = set()
@@ -250,66 +265,64 @@ def usar_ytdlp(url: str, carpeta: Path) -> None:
     )
 
 
-def procesar_url(sesion, url, base_salida, args, log_errores):
-    workers, originales, ytdlp = args.workers, args.originales, args.ytdlp
-    usar_titulo = not args.carpeta_url
-    print(f"\n==> {url}")
+def url_con_pagina(url: str, param: str, n: int) -> str:
+    """Devuelve la URL con ?param=n (reemplaza el valor si ya existía)."""
+    p = urlparse(url)
+    q = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if k != param]
+    q.append((param, str(n)))
+    return urlunparse(p._replace(query=urlencode(q)))
 
-    try:
-        r = sesion.get(url, timeout=30)
-        r.raise_for_status()
-        html = r.text
-    except Exception as e:  # noqa: BLE001
-        print(f"   ERROR al abrir la página: {e}")
-        log_errores.append(f"{url}\tPAGINA\t{e}")
-        return
 
-    carpeta = carpeta_para_pagina(base_salida, url, html, usar_titulo)
-    carpeta.mkdir(parents=True, exist_ok=True)
-    print(f"   carpeta: {carpeta.name}")
+def pagina_inicial(url: str, param: str) -> int | None:
+    for k, v in parse_qsl(urlparse(url).query):
+        if k == param and v.isdigit():
+            return int(v)
+    return None
 
-    # Si la URL apunta directo a un archivo media, bájalo y listo
-    if extension(url) in MEDIA_EXT:
-        medios = {url}
-    else:
-        medios = extraer_media(html, url, originales)
-        (carpeta / "pagina.html").write_text(html, encoding="utf-8", errors="ignore")
 
-        # Grid/galería: miniaturas que enlazan a otra página -> entrar y sacar la imagen completa
-        if not args.sin_grid:
-            items = extraer_grid(html, url, not args.otros_dominios)
-            items = dict(list(items.items())[: args.max_enlaces])
-            if items:
-                print(f"   {len(items)} enlaces de grid por seguir...")
-                base_madre = frozenset(medios)
-                encontrados = 0
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    futs = {
-                        pool.submit(media_de_detalle, sesion, h, url, originales, base_madre): h
-                        for h in items
-                    }
-                    for fut in as_completed(futs):
-                        h = futs[fut]
-                        try:
-                            nuevos = fut.result()
-                        except Exception as e:  # noqa: BLE001
-                            log_errores.append(f"{h}\tGRID\t{e}")
-                            continue
-                        if nuevos:
-                            encontrados += 1
-                            medios -= items[h]  # cambia la miniatura por la imagen completa
-                            medios |= nuevos
-                print(f"   imágenes completas halladas en {encontrados} de {len(items)} enlaces")
+def seguir_grid(sesion, html, url, medios, vistos_enlaces, args, log_errores) -> int:
+    """Entra a los enlaces del grid (que coincidan con --patron-grid) y cambia cada
+    miniatura por la imagen completa. Modifica `medios` en sitio.
+    Devuelve cuántos enlaces nuevos se siguieron."""
+    items, total = extraer_grid(html, url, not args.otros_dominios, args.patron_grid)
+    pendientes = {h: t for h, t in items.items() if h not in vistos_enlaces}
+    pendientes = dict(list(pendientes.items())[: args.max_enlaces])
+    patron = args.patron_grid or "(todos)"
+    print(f"   grid: {total} enlaces con miniatura | {len(items)} coinciden con {patron} "
+          f"| {len(pendientes)} nuevos por seguir")
+    if not pendientes:
+        return 0
 
-    print(f"   {len(medios)} archivos media encontrados")
+    base_madre = frozenset(medios)
+    hallados = 0
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futs = {
+            pool.submit(media_de_detalle, sesion, h, url, args.originales, base_madre): h
+            for h in pendientes
+        }
+        for fut in as_completed(futs):
+            h = futs[fut]
+            vistos_enlaces.add(h)
+            try:
+                nuevos = fut.result()
+            except Exception as e:  # noqa: BLE001
+                log_errores.append(f"{h}\tGRID\t{e}")
+                continue
+            if nuevos:
+                hallados += 1
+                medios -= pendientes[h]  # cambia la miniatura por la imagen completa
+                medios |= nuevos
+    print(f"   imágenes completas halladas en {hallados} de {len(pendientes)} enlaces")
+    return len(pendientes)
 
-    usados: set[str] = set()
-    tareas = {}
+
+def descargar_lote(sesion, medios, carpeta, usados, workers, referer, log_errores):
+    ok = omit = err = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
+        tareas = {}
         for m in sorted(medios):
             destino = carpeta / nombre_archivo(m, usados)
-            tareas[pool.submit(descargar, sesion, m, destino, url)] = m
-        ok = omit = err = 0
+            tareas[pool.submit(descargar, sesion, m, destino, referer)] = m
         for fut in as_completed(tareas):
             res = fut.result()
             if res == "ok":
@@ -318,10 +331,96 @@ def procesar_url(sesion, url, base_salida, args, log_errores):
                 omit += 1
             else:
                 err += 1
-                log_errores.append(f"{tareas[fut]}\t{url}\t{res}")
-    print(f"   descargados: {ok} | ya existían: {omit} | errores: {err}")
+                log_errores.append(f"{tareas[fut]}\t{referer}\t{res}")
+    return ok, omit, err
 
-    if ytdlp:
+
+def procesar_url(sesion, url, base_salida, args, log_errores):
+    print(f"\n==> {url}")
+    originales, usar_titulo = args.originales, not args.carpeta_url
+    directo = extension(url) in MEDIA_EXT
+    inicio = pagina_inicial(url, args.param_pagina) if args.paginar else None
+    n = inicio or 1
+
+    try:
+        r = sesion.get(url, timeout=30)
+        r.raise_for_status()
+        html = html_de(r)
+    except Exception as e:  # noqa: BLE001
+        print(f"   ERROR al abrir la página: {e}")
+        log_errores.append(f"{url}\tPAGINA\t{e}")
+        return
+
+    carpeta = carpeta_para_pagina(base_salida, url, html, usar_titulo)
+    carpeta.mkdir(parents=True, exist_ok=True)
+    print(f"   carpeta: {carpeta.name}")
+    if not directo:
+        (carpeta / "pagina.html").write_text(html, encoding="utf-8", errors="ignore")
+
+    usados: set[str] = set()
+    vistos_medios: set[str] = set()
+    vistos_enlaces: set[str] = set()
+    lista_prueba: list[str] = []
+    tot_ok = tot_omit = tot_err = 0
+    pagina_url = url
+    primera = True
+    paginas_hechas = 0
+
+    while True:
+        if not primera:
+            pagina_url = url_con_pagina(url, args.param_pagina, n)
+            try:
+                r = sesion.get(pagina_url, timeout=30)
+                r.raise_for_status()
+                html = html_de(r)
+            except Exception as e:  # noqa: BLE001
+                print(f"   [pág {n}] fin de paginación ({e})")
+                break
+
+        enlaces_nuevos = 0
+        if directo:
+            medios = {url}
+        else:
+            print(f"   [pág {n}] {pagina_url}")
+            medios = extraer_media(html, pagina_url, originales)
+            if not args.sin_grid:
+                enlaces_nuevos = seguir_grid(sesion, html, pagina_url, medios,
+                                             vistos_enlaces, args, log_errores)
+
+        nuevos_medios = medios - vistos_medios
+        print(f"   [pág {n}] {len(medios)} archivos media, {len(nuevos_medios)} nuevos")
+        paginas_hechas += 1
+
+        if not nuevos_medios and enlaces_nuevos == 0:
+            if not primera:
+                print(f"   [pág {n}] sin contenido nuevo: fin de paginación")
+            break
+        vistos_medios |= medios
+
+        if args.prueba:
+            lista_prueba.extend(sorted(nuevos_medios))
+        else:
+            ok, omit, err = descargar_lote(sesion, nuevos_medios, carpeta, usados,
+                                           args.workers, pagina_url, log_errores)
+            tot_ok, tot_omit, tot_err = tot_ok + ok, tot_omit + omit, tot_err + err
+            print(f"   descargados: {ok} | ya existían: {omit} | errores: {err}")
+
+        if directo or not args.paginar:
+            break
+        if paginas_hechas >= args.max_paginas:
+            print(f"   límite de {args.max_paginas} páginas alcanzado (--max-paginas)")
+            break
+        n += 1
+        primera = False
+
+    if args.prueba:
+        (carpeta / "lista_prueba.txt").write_text("\n".join(lista_prueba), encoding="utf-8")
+        print(f"   PRUEBA: {len(lista_prueba)} archivos se descargarían -> {carpeta / 'lista_prueba.txt'}")
+    elif args.paginar:
+        print(f"   TOTAL {paginas_hechas} páginas | descargados: {tot_ok} | "
+              f"ya existían: {tot_omit} | errores: {tot_err}")
+
+    if args.ytdlp and not args.prueba:
         usar_ytdlp(url, carpeta)
 
 
@@ -344,6 +443,12 @@ def main():
     ap.add_argument("--carpeta-url", action="store_true", help="nombrar carpetas con la URL en vez del h1/title")
     ap.add_argument("--sin-grid", action="store_true", help="no seguir los enlaces de las miniaturas del grid")
     ap.add_argument("--max-enlaces", type=int, default=300, help="máximo de enlaces de grid por página (default: 300)")
+    ap.add_argument("--patron-grid", default="/s/",
+                    help='solo seguir enlaces del grid cuya ruta contenga esto (default: "/s/"; usa "" para seguir todos)')
+    ap.add_argument("--paginar", action="store_true", help="recorrer la paginación ?p=1, ?p=2, ... hasta que no haya contenido nuevo")
+    ap.add_argument("--param-pagina", default="p", help="nombre del parámetro de paginación (default: p)")
+    ap.add_argument("--max-paginas", type=int, default=200, help="tope de páginas por URL (default: 200)")
+    ap.add_argument("--prueba", action="store_true", help="no descarga: solo lista lo que descargaría (lista_prueba.txt)")
     ap.add_argument("--otros-dominios", action="store_true", help="seguir también enlaces de grid hacia otros dominios")
     args = ap.parse_args()
 
