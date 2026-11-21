@@ -15,7 +15,6 @@ Uso:
     python respaldar_media.py --ytdlp              # además intenta videos de YouTube/Vimeo/etc.
                                                    # (requiere: pip install yt-dlp)
 
-PROBLEMA: no detecta las imagenes grid. no las persigue.
 urls.txt: una URL por línea. Las líneas que empiezan con # se ignoran.
 Es reanudable: si lo vuelves a correr, salta lo que ya se descargó.
 """
@@ -121,7 +120,11 @@ def extraer_media(html: str, base_url: str, originales: bool) -> set[str]:
     soup = BeautifulSoup(html, "html.parser")
     candidatos: set[str] = set()
 
-    atributos_src = ("src", "data-src", "data-lazy-src", "data-original", "poster", "data-full-url")
+    atributos_src = (
+        "src", "data-src", "data-lazy-src", "data-original", "poster", "data-full-url",
+        "data-full", "data-large", "data-large_image", "data-zoom-image",
+        "data-orig-file", "data-large-file", "data-image", "data-bg",
+    )
     for tag in soup.find_all(["img", "video", "audio", "source", "embed", "track"]):
         for attr in atributos_src:
             if tag.get(attr):
@@ -156,6 +159,54 @@ def extraer_media(html: str, base_url: str, originales: bool) -> set[str]:
                 absoluta = WP_SIZE.sub("", absoluta)
             resultado.add(absoluta)
     return resultado
+
+
+def extraer_grid(html: str, base_url: str, mismo_dominio: bool = True) -> dict[str, set[str]]:
+    """Encuentra miniaturas que enlazan a OTRA página (típico grid/galería).
+    Devuelve {url_de_la_página_destino: {urls_de_sus_miniaturas}}."""
+    soup = BeautifulSoup(html, "html.parser")
+    host = urlparse(base_url).netloc
+    items: dict[str, set[str]] = {}
+    for a in soup.find_all("a", href=True):
+        img = a.find("img")
+        if not img:
+            continue
+        href = urljoin(base_url, a["href"].strip()).split("#")[0]
+        if not href.startswith(("http://", "https://")):
+            continue
+        if extension(href) in MEDIA_EXT:  # ya lo cubre extraer_media
+            continue
+        if href.rstrip("/") == base_url.rstrip("/"):
+            continue
+        if mismo_dominio and urlparse(href).netloc != host:
+            continue
+        items.setdefault(href, set()).update(extraer_media(str(img), base_url, False))
+    return items
+
+
+def media_de_detalle(sesion, url, referer, originales, excluir) -> set[str]:
+    """Abre la página de detalle de un item del grid y saca su media principal.
+    Toma el media que NO estaba ya en la página madre (así se descartan logos, menús
+    y miniaturas repetidas); si no queda nada, usa og:image/og:video como respaldo."""
+    r = sesion.get(url, timeout=30, headers={"Referer": referer})
+    r.raise_for_status()
+    if "html" not in r.headers.get("Content-Type", "html"):
+        return set()
+    html = r.text
+
+    soup = BeautifulSoup(html, "html.parser")
+    og: set[str] = set()
+    for meta in soup.find_all("meta"):
+        prop = (meta.get("property") or meta.get("name") or "").lower()
+        if prop in {"og:image", "og:image:url", "og:video", "og:video:url", "twitter:image"}:
+            if meta.get("content"):
+                absoluta = urljoin(url, meta["content"].strip()).split("#")[0]
+                if extension(absoluta) in MEDIA_EXT:
+                    og.add(WP_SIZE.sub("", absoluta) if originales else absoluta)
+
+    todos = extraer_media(html, url, originales)
+    nuevos = todos - excluir
+    return nuevos or og
 
 
 def nombre_archivo(url: str, usados: set[str]) -> str:
@@ -199,7 +250,9 @@ def usar_ytdlp(url: str, carpeta: Path) -> None:
     )
 
 
-def procesar_url(sesion, url, base_salida, workers, originales, ytdlp, usar_titulo, log_errores):
+def procesar_url(sesion, url, base_salida, args, log_errores):
+    workers, originales, ytdlp = args.workers, args.originales, args.ytdlp
+    usar_titulo = not args.carpeta_url
     print(f"\n==> {url}")
 
     try:
@@ -221,6 +274,32 @@ def procesar_url(sesion, url, base_salida, workers, originales, ytdlp, usar_titu
     else:
         medios = extraer_media(html, url, originales)
         (carpeta / "pagina.html").write_text(html, encoding="utf-8", errors="ignore")
+
+        # Grid/galería: miniaturas que enlazan a otra página -> entrar y sacar la imagen completa
+        if not args.sin_grid:
+            items = extraer_grid(html, url, not args.otros_dominios)
+            items = dict(list(items.items())[: args.max_enlaces])
+            if items:
+                print(f"   {len(items)} enlaces de grid por seguir...")
+                base_madre = frozenset(medios)
+                encontrados = 0
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    futs = {
+                        pool.submit(media_de_detalle, sesion, h, url, originales, base_madre): h
+                        for h in items
+                    }
+                    for fut in as_completed(futs):
+                        h = futs[fut]
+                        try:
+                            nuevos = fut.result()
+                        except Exception as e:  # noqa: BLE001
+                            log_errores.append(f"{h}\tGRID\t{e}")
+                            continue
+                        if nuevos:
+                            encontrados += 1
+                            medios -= items[h]  # cambia la miniatura por la imagen completa
+                            medios |= nuevos
+                print(f"   imágenes completas halladas en {encontrados} de {len(items)} enlaces")
 
     print(f"   {len(medios)} archivos media encontrados")
 
@@ -263,6 +342,9 @@ def main():
     ap.add_argument("--originales", action="store_true", help="WordPress: quita sufijo -300x200 para bajar el original")
     ap.add_argument("--ytdlp", action="store_true", help="usa yt-dlp para videos embebidos (YouTube, Vimeo...)")
     ap.add_argument("--carpeta-url", action="store_true", help="nombrar carpetas con la URL en vez del h1/title")
+    ap.add_argument("--sin-grid", action="store_true", help="no seguir los enlaces de las miniaturas del grid")
+    ap.add_argument("--max-enlaces", type=int, default=300, help="máximo de enlaces de grid por página (default: 300)")
+    ap.add_argument("--otros-dominios", action="store_true", help="seguir también enlaces de grid hacia otros dominios")
     args = ap.parse_args()
 
     ruta = Path(args.input)
@@ -278,8 +360,7 @@ def main():
     errores: list[str] = []
     for i, u in enumerate(urls, 1):
         print(f"\n[{i}/{len(urls)}]", end="")
-        procesar_url(sesion, u, salida, args.workers, args.originales, args.ytdlp,
-                     not args.carpeta_url, errores)
+        procesar_url(sesion, u, salida, args, errores)
 
     if errores:
         (salida / "errores.txt").write_text("\n".join(errores), encoding="utf-8")
