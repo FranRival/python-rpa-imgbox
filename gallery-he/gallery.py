@@ -83,6 +83,20 @@ def carpeta_para_url(base: Path, url: str) -> Path:
     return base / nombre
 
 
+def carpeta_para_pagina(base: Path, url: str, html: str, usar_titulo: bool) -> Path:
+    """Nombra la carpeta con el h1 (o title) de la página; si no hay, usa la URL.
+    Se añade un hash corto de la URL para evitar choques entre títulos iguales."""
+    if usar_titulo:
+        soup = BeautifulSoup(html, "html.parser")
+        h1 = soup.find("h1")
+        texto = h1.get_text(" ", strip=True) if h1 else ""
+        if not texto and soup.title and soup.title.string:
+            texto = soup.title.string.strip()
+        if texto:
+            return base / f"{slug(texto, 70)}_{hashlib.md5(url.encode()).hexdigest()[:6]}"
+    return carpeta_para_url(base, url)
+
+
 def extension(url: str) -> str:
     return Path(unquote(urlparse(url).path)).suffix.lower()
 
@@ -184,10 +198,8 @@ def usar_ytdlp(url: str, carpeta: Path) -> None:
     )
 
 
-def procesar_url(sesion, url, base_salida, workers, originales, ytdlp, log_errores):
+def procesar_url(sesion, url, base_salida, workers, originales, ytdlp, usar_titulo, log_errores):
     print(f"\n==> {url}")
-    carpeta = carpeta_para_url(base_salida, url)
-    carpeta.mkdir(parents=True, exist_ok=True)
 
     try:
         r = sesion.get(url, timeout=30)
@@ -197,6 +209,10 @@ def procesar_url(sesion, url, base_salida, workers, originales, ytdlp, log_error
         print(f"   ERROR al abrir la página: {e}")
         log_errores.append(f"{url}\tPAGINA\t{e}")
         return
+
+    carpeta = carpeta_para_pagina(base_salida, url, html, usar_titulo)
+    carpeta.mkdir(parents=True, exist_ok=True)
+    print(f"   carpeta: {carpeta.name}")
 
     # Si la URL apunta directo a un archivo media, bájalo y listo
     if extension(url) in MEDIA_EXT:
@@ -245,6 +261,7 @@ def main():
     ap.add_argument("-w", "--workers", type=int, default=4, help="descargas simultáneas por URL (default: 4)")
     ap.add_argument("--originales", action="store_true", help="WordPress: quita sufijo -300x200 para bajar el original")
     ap.add_argument("--ytdlp", action="store_true", help="usa yt-dlp para videos embebidos (YouTube, Vimeo...)")
+    ap.add_argument("--carpeta-url", action="store_true", help="nombrar carpetas con la URL en vez del h1/title")
     args = ap.parse_args()
 
     ruta = Path(args.input)
@@ -260,7 +277,8 @@ def main():
     errores: list[str] = []
     for i, u in enumerate(urls, 1):
         print(f"\n[{i}/{len(urls)}]", end="")
-        procesar_url(sesion, u, salida, args.workers, args.originales, args.ytdlp, errores)
+        procesar_url(sesion, u, salida, args.workers, args.originales, args.ytdlp,
+                     not args.carpeta_url, errores)
 
     if errores:
         (salida / "errores.txt").write_text("\n".join(errores), encoding="utf-8")
