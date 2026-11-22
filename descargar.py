@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 # =========================
 # CONFIGURACIÓN
 # =========================
-BASE_DIR = r"C:\Users\dell\Desktop\uploader\gallery-he\respaldo"
+BASE_DIR = r"C:\Users\dell\Downloads\desc\links3"
 DELAY = 0.4
 BASE_HEADERS = {
     "User-Agent": (
