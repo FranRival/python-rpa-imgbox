@@ -6,7 +6,7 @@ from html.parser import HTMLParser
 # CONFIGURACIÓN
 # ==========================================
 
-CARPETA_MADRE = r"C:\Users\dell\Desktop\mis_carpetas"
+CARPETA_MADRE = r"C:\Users\dell\Downloads\desc\links3"
 
 ARCHIVO_SALIDA = os.path.join(
     CARPETA_MADRE,

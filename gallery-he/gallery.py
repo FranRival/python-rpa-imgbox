@@ -11,6 +11,7 @@ Instalación:
 Uso:
     python respaldar_media.py                      # usa urls.txt -> carpeta respaldo/
     python respaldar_media.py -i mis_urls.txt -o D:/respaldo -w 6
+    python respaldar_media.py --pausa-cada 20 --pausa-seg 65   # pausa cada 20 URLs (valores por defecto)
     python respaldar_media.py --originales         # WordPress: baja la imagen sin -300x200
     python respaldar_media.py --paginar --prueba   # recorre ?p=1,2,3... y solo lista (sin descargar)
     python respaldar_media.py --paginar --sitio "midominio.com/s/"
@@ -24,16 +25,23 @@ Uso:
 
 urls.txt: una URL por línea. Las líneas que empiezan con # se ignoran.
 Es reanudable: si lo vuelves a correr, salta lo que ya se descargó.
+
+Carpetas: se nombran con el h1 (o title) de la página. Si dos páginas tienen el mismo
+nombre, la segunda queda _2, la tercera _3, etc. El mapa URL -> carpeta se guarda en
+_carpetas.json (dentro de la carpeta de salida) para que al reanudar cada URL vuelva
+a su misma carpeta.
 """
 
 import argparse
 from collections import Counter
 import hashlib
+import json
 import re
 import shutil
 import subprocess
 import threading
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
 from pathlib import Path
@@ -261,17 +269,37 @@ def slug(texto: str, maximo: int = 80) -> str:
     return texto[:maximo] or "pagina"
 
 
+# ---------------------- NOMBRES DE CARPETA ----------------------
+CARPETAS: dict[str, str] = {}   # url -> nombre de carpeta asignado (se guarda en _carpetas.json)
+
+
+def cargar_carpetas(base: Path) -> None:
+    CARPETAS.clear()
+    f = base / "_carpetas.json"
+    if f.is_file():
+        try:
+            CARPETAS.update(json.loads(f.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            pass
+
+
+def guardar_carpetas(base: Path) -> None:
+    (base / "_carpetas.json").write_text(
+        json.dumps(CARPETAS, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
 def carpeta_para_url(base: Path, url: str) -> Path:
     p = urlparse(url)
-    nombre = slug(p.netloc + p.path)
-    if p.query:
-        nombre += "_" + hashlib.md5(p.query.encode()).hexdigest()[:6]
-    return base / nombre
+    return base / slug(p.netloc + p.path)
 
 
 def carpeta_para_pagina(base: Path, url: str, html: str, usar_titulo: bool) -> Path:
-    """Nombra la carpeta con el h1 (o title) de la página; si no hay, usa la URL.
-    Se añade un hash corto de la URL para evitar choques entre títulos iguales."""
+    """Nombra la carpeta con el h1 (o title). Si el nombre ya lo usa otra página,
+    agrega _2, _3, _4... Una misma URL siempre recibe la misma carpeta (reanudable)."""
+    if url in CARPETAS:
+        return base / CARPETAS[url]
+
+    nombre = ""
     if usar_titulo:
         soup = BeautifulSoup(html, "html.parser")
         h1 = soup.find("h1")
@@ -279,8 +307,20 @@ def carpeta_para_pagina(base: Path, url: str, html: str, usar_titulo: bool) -> P
         if not texto and soup.title and soup.title.string:
             texto = soup.title.string.strip()
         if texto:
-            return base / f"{slug(texto, 70)}_{hashlib.md5(url.encode()).hexdigest()[:6]}"
-    return carpeta_para_url(base, url)
+            nombre = slug(texto, 70)
+    if not nombre:
+        nombre = carpeta_para_url(base, url).name
+
+    # comparación en minúsculas: Windows no distingue mayúsculas en nombres de carpeta
+    usados = {v.lower() for v in CARPETAS.values()}
+    final, n = nombre, 1
+    while final.lower() in usados or (base / final).exists():
+        n += 1
+        final = f"{nombre}_{n}"
+    CARPETAS[url] = final
+    guardar_carpetas(base)
+    return base / final
+# ----------------------------------------------------------------
 
 
 def extension(url: str) -> str:
@@ -1053,7 +1093,9 @@ def procesar_url(sesion, entrada, base_salida, args, log_errores):
             log_errores.append(f"{url}\tPAGINA\t{e}")
             return
 
-    carpeta = carpeta_para_pagina(base_salida, url or Path(entrada).stem, html, usar_titulo)
+    # clave del mapa de carpetas: la URL, o la ruta del archivo si es código fuente local sin URL
+    clave = url or entrada
+    carpeta = carpeta_para_pagina(base_salida, clave, html, usar_titulo)
     carpeta.mkdir(parents=True, exist_ok=True)
     print(f"   carpeta: {carpeta.name}")
     if not directo:
@@ -1226,6 +1268,10 @@ def main():
                     help="prueba descargar UNA imagen con distintas cabeceras y explica qué protección hay")
     ap.add_argument("--pagina", default="", help="con --diagnostico: la página /s/... donde aparece esa imagen")
     ap.add_argument("--otros-dominios", action="store_true", help="seguir también enlaces de grid hacia otros dominios")
+    ap.add_argument("--pausa-cada", type=int, default=20,
+                    help="hacer una pausa cada N URLs del txt (default: 20; 0 = sin pausa)")
+    ap.add_argument("--pausa-seg", type=int, default=65,
+                    help="segundos de la pausa (default: 65)")
     args = ap.parse_args()
 
     sesion = crear_sesion()
@@ -1251,12 +1297,20 @@ def main():
     urls = list(dict.fromkeys(entradas))
     salida = Path(args.output)
     salida.mkdir(parents=True, exist_ok=True)
+    cargar_carpetas(salida)
     print(f"{len(urls)} URLs -> {salida.resolve()}")
 
     errores: list[str] = []
     for i, u in enumerate(urls, 1):
         print(f"\n[{i}/{len(urls)}]", end="")
         procesar_url(sesion, u, salida, args, errores)
+
+        if args.pausa_cada > 0 and i % args.pausa_cada == 0 and i < len(urls):
+            print(f"\n--- Pausa tras {i} URLs: esperando {args.pausa_seg} s ---")
+            for restante in range(args.pausa_seg, 0, -1):
+                print(f"\r   continúa en {restante:3d} s ", end="", flush=True)
+                time.sleep(1)
+            print("\r   pausa terminada.              ")
 
     if errores:
         (salida / "errores.txt").write_text("\n".join(errores), encoding="utf-8")
