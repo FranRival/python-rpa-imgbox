@@ -12,6 +12,8 @@ Uso:
     python respaldar_media.py                      # usa urls.txt -> carpeta respaldo/
     python respaldar_media.py -i mis_urls.txt -o D:/respaldo -w 6
     python respaldar_media.py --pausa-cada 20 --pausa-seg 65   # pausa cada 20 URLs (valores por defecto)
+    python respaldar_media.py --max-peticiones 20 --ventana-seg 62   # tope de peticiones por sitio (default)
+    python respaldar_media.py --conservar-txt      # no borrar del txt las URLs ya procesadas
     python respaldar_media.py --originales         # WordPress: baja la imagen sin -300x200
     python respaldar_media.py --paginar --prueba   # recorre ?p=1,2,3... y solo lista (sin descargar)
     python respaldar_media.py --paginar --sitio "midominio.com/s/"
@@ -30,10 +32,17 @@ Carpetas: se nombran con el h1 (o title) de la página. Si dos páginas tienen e
 nombre, la segunda queda _2, la tercera _3, etc. El mapa URL -> carpeta se guarda en
 _carpetas.json (dentro de la carpeta de salida) para que al reanudar cada URL vuelva
 a su misma carpeta.
+
+Tope de peticiones: TODAS las peticiones (páginas, enlaces de detalle e imágenes, de todos los
+hilos) pasan por un limitador: máximo --max-peticiones cada --ventana-seg segundos por sitio.
+Si un sitio responde 429, se pausa todo hacia ese sitio y se reintenta.
+
+URLs procesadas: al terminar cada URL del txt se borra del archivo y se anota en
+<nombre>_procesadas.txt. Si la página no se pudo abrir, se queda en el txt. Con --prueba no se borra nada.
 """
 
 import argparse
-from collections import Counter
+from collections import Counter, deque
 import hashlib
 import json
 import re
@@ -49,8 +58,6 @@ from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlparse, urlun
 
 import requests
 from bs4 import BeautifulSoup
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 # ======================= CONFIGURACIÓN =======================
 # SITIO: filtro para localizar las páginas de detalle que hay que visitar.
@@ -242,17 +249,87 @@ def diagnostico(sesion: requests.Session, url_img: str, url_pagina: str = "") ->
         print(f"    Estados recibidos: {sorted(estados)}. Revisa que la URL de la imagen sea correcta.")
 
 
+class LimitadorPeticiones:
+    """Tope de peticiones por sitio (host): como máximo `maximo` cada `ventana` segundos,
+    sumando TODOS los hilos. Si se supera, el hilo espera. También permite castigar un host
+    (pausa para todos los hilos) cuando responde 429."""
+
+    def __init__(self, maximo: int, ventana: float):
+        # +0.5 s de margen: la hora se anota justo antes de enviar y el envío real puede salir
+        # unos milisegundos después; así el sitio nunca ve más de `maximo` en `ventana` segundos
+        self.maximo, self.ventana = maximo, ventana + 0.5
+        self._tiempos: dict[str, deque] = {}
+        self._hasta: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def esperar(self, host: str) -> None:
+        if self.maximo <= 0:
+            return
+        while True:
+            with self._lock:
+                ahora = time.monotonic()
+                dq = self._tiempos.setdefault(host, deque())
+                while dq and ahora - dq[0] >= self.ventana:
+                    dq.popleft()
+                espera = max(0.0, self._hasta.get(host, 0.0) - ahora)
+                if espera == 0.0 and len(dq) < self.maximo:
+                    dq.append(ahora)
+                    return
+                if espera == 0.0:
+                    espera = self.ventana - (ahora - dq[0])
+            time.sleep(max(espera, 0.05))
+
+    def penalizar(self, host: str, segundos: float) -> None:
+        with self._lock:
+            self._hasta[host] = max(self._hasta.get(host, 0.0), time.monotonic() + segundos)
+
+
+class SesionLimitada(requests.Session):
+    """Session que cuenta TODA petición HTTP real (también cada redirección y cada reintento)
+    en el limitador, y maneja los errores:
+      - HTTP 429 (demasiadas peticiones): pausa a todos los hilos lo que pida el servidor
+        (Retry-After) o 90 s, y reintenta.
+      - 500/502/503/504 y fallos de conexión: hasta 3 reintentos con espera creciente.
+    Los reintentos se hacen aquí (no en urllib3) para que ninguno escape del tope."""
+    limitador: "LimitadorPeticiones | None" = None
+
+    def send(self, request, **kwargs):
+        if self.limitador:
+            self.limitador.esperar(urlparse(request.url).netloc.lower())
+        return super().send(request, **kwargs)
+
+    def request(self, method, url, *args, **kwargs):
+        host = urlparse(str(url)).netloc.lower()
+        for intento in range(4):
+            ultimo = intento == 3
+            try:
+                resp = super().request(method, url, *args, **kwargs)
+            except (requests.ConnectionError, requests.Timeout):
+                if ultimo:
+                    raise
+                time.sleep(1.5 * 2 ** intento)
+                continue
+            if resp.status_code == 429 and not ultimo:
+                ra = resp.headers.get("Retry-After", "")
+                espera = min(max(int(ra), 5), 900) if ra.isdigit() else 90
+                resp.close()
+                print(f"\n   (HTTP 429 de {host}: el sitio pide frenar. Pausa de {espera} s para todas las peticiones)")
+                if self.limitador:
+                    self.limitador.penalizar(host, espera)
+                else:
+                    time.sleep(espera)
+                continue
+            if resp.status_code in (500, 502, 503, 504) and not ultimo:
+                resp.close()
+                time.sleep(1.5 * 2 ** intento)
+                continue
+            return resp
+        return resp
+
+
 def crear_sesion() -> requests.Session:
-    s = requests.Session()
+    s = SesionLimitada()
     s.headers.update(HEADERS)
-    retry = Retry(
-        total=3,
-        backoff_factor=1.5,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=("GET", "HEAD"),
-    )
-    s.mount("http://", HTTPAdapter(max_retries=retry))
-    s.mount("https://", HTTPAdapter(max_retries=retry))
     return s
 
 
@@ -1091,7 +1168,7 @@ def procesar_url(sesion, entrada, base_salida, args, log_errores):
             print("   (si el sitio bloquea scripts o carga con JavaScript: abre la página en tu navegador,"
                   " copia el código fuente a un .html y usa --fuente archivo.html)")
             log_errores.append(f"{url}\tPAGINA\t{e}")
-            return
+            return False
 
     # clave del mapa de carpetas: la URL, o la ruta del archivo si es código fuente local sin URL
     clave = url or entrada
@@ -1214,6 +1291,23 @@ def procesar_url(sesion, entrada, base_salida, args, log_errores):
 
     if args.ytdlp and not args.prueba:
         usar_ytdlp(url, carpeta)
+    return True
+
+
+def quitar_url_del_txt(ruta: Path, url: str) -> None:
+    """Borra la URL ya procesada del txt (todas sus apariciones) y la anota en
+    <nombre>_procesadas.txt como respaldo. Los comentarios y demás líneas no se tocan."""
+    try:
+        lineas = ruta.read_text(encoding="utf-8").splitlines()
+        nuevas = [l for l in lineas if l.strip() != url]
+        if len(nuevas) != len(lineas):
+            tmp = ruta.with_name(ruta.name + ".tmp")
+            tmp.write_text("\n".join(nuevas) + ("\n" if nuevas else ""), encoding="utf-8")
+            tmp.replace(ruta)
+        with open(ruta.with_name(ruta.stem + "_procesadas.txt"), "a", encoding="utf-8") as f:
+            f.write(url + "\n")
+    except OSError as e:
+        print(f"   (no pude actualizar {ruta.name}: {e})")
 
 
 def leer_urls(ruta: Path) -> list[str]:
@@ -1272,20 +1366,30 @@ def main():
                     help="hacer una pausa cada N URLs del txt (default: 20; 0 = sin pausa)")
     ap.add_argument("--pausa-seg", type=int, default=65,
                     help="segundos de la pausa (default: 65)")
+    ap.add_argument("--max-peticiones", type=int, default=20,
+                    help="tope de peticiones por sitio dentro de cada ventana (default: 20; 0 = sin tope)")
+    ap.add_argument("--ventana-seg", type=float, default=62,
+                    help="ventana en segundos del tope anterior (default: 62)")
+    ap.add_argument("--conservar-txt", action="store_true",
+                    help="no borrar del txt las URLs ya procesadas")
     args = ap.parse_args()
 
     sesion = crear_sesion()
+    sesion.limitador = LimitadorPeticiones(args.max_peticiones, args.ventana_seg)
     configurar_sesion(sesion, args)
     if args.diagnostico:
         diagnostico(sesion, args.diagnostico, args.pagina)
         return
 
     entradas: list[str] = []
+    ruta_txt: Path | None = None
+    desde_txt: set[str] = set()
     if args.input or not args.fuente:
-        ruta = Path(args.input or "urls.txt")
-        if not ruta.exists():
-            sys.exit(f"No encuentro {ruta}. Crea el archivo con una URL por línea (o usa --fuente archivo.html).")
-        entradas += leer_urls(ruta)
+        ruta_txt = Path(args.input or "urls.txt")
+        if not ruta_txt.exists():
+            sys.exit(f"No encuentro {ruta_txt}. Crea el archivo con una URL por línea (o usa --fuente archivo.html).")
+        entradas += leer_urls(ruta_txt)
+        desde_txt = set(entradas)
     for f in args.fuente or []:
         pth = Path(f).expanduser()
         if pth.is_dir():
@@ -1299,11 +1403,17 @@ def main():
     salida.mkdir(parents=True, exist_ok=True)
     cargar_carpetas(salida)
     print(f"{len(urls)} URLs -> {salida.resolve()}")
+    if args.max_peticiones > 0:
+        print(f"Tope: {args.max_peticiones} peticiones cada {args.ventana_seg:g} s por sitio (--max-peticiones / --ventana-seg)")
 
     errores: list[str] = []
     for i, u in enumerate(urls, 1):
         print(f"\n[{i}/{len(urls)}]", end="")
-        procesar_url(sesion, u, salida, args, errores)
+        procesada = procesar_url(sesion, u, salida, args, errores)
+
+        # URL terminada (no falló al abrir la página): se borra del txt. Con --prueba no se borra nada.
+        if procesada and ruta_txt and u in desde_txt and not args.prueba and not args.conservar_txt:
+            quitar_url_del_txt(ruta_txt, u)
 
         if args.pausa_cada > 0 and i % args.pausa_cada == 0 and i < len(urls):
             print(f"\n--- Pausa tras {i} URLs: esperando {args.pausa_seg} s ---")
