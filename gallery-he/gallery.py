@@ -1366,7 +1366,7 @@ def main():
                     help="hacer una pausa cada N URLs del txt (default: 20; 0 = sin pausa)")
     ap.add_argument("--pausa-seg", type=int, default=65,
                     help="segundos de la pausa (default: 65)")
-    ap.add_argument("--max-peticiones", type=int, default=20,
+    ap.add_argument("--max-peticiones", type=int, default=50,
                     help="tope de peticiones por sitio dentro de cada ventana (default: 20; 0 = sin tope)")
     ap.add_argument("--ventana-seg", type=float, default=62,
                     help="ventana en segundos del tope anterior (default: 62)")
