@@ -186,6 +186,7 @@ if __name__ == "__main__":
 
 # ---------------- NOTAS (problemas observados en el servidor) ----------------
 # - Se ejecuta cada 10 min = 144 requests/día. Si no se cierran, acumulan sockets.
+# 27/11/26. FALSO: solo hace una peticion HTTP por dia. 1 request diario. 
 # - Síntomas: SSH deja de responder, terminal de Lightsail falla, nginx sigue
 #   corriendo, hace falta reboot.
 # - Revisar: limits.conf (soft/hard nofile), workers de nginx
